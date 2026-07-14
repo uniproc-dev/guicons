@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-guicons = { path = "../../.." }
+guicons = { path = "../../../../guicons" }
 
 [build-dependencies]
-guicons = { path = "../../..", features = ["build"] }
+guicons-build = { path = "../../../../guicons-build" }

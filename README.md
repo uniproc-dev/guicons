@@ -20,7 +20,7 @@ file = "docker.svg"
 ```rust
 // build.rs
 fn main() {
-    guicons::build::IconBuild::auto()
+    guicons_build::IconBuild::auto()
         .emit_rust_registry(std::env::var("OUT_DIR").unwrap() + "/icons.rs")
         .emit_slint_global(std::env::var("OUT_DIR").unwrap() + "/icons.slint")
         .run();
@@ -36,6 +36,6 @@ mod icons {
 let key = icons::key_from_dynamic_family_variant("settings", Some("filled"));
 ```
 
-Use the crate normally at runtime, and enable `features = ["build"]` in
-`build-dependencies` when generating code from `build.rs`.
+Use `guicons` normally at runtime, and add `guicons-build` as a
+`build-dependencies` entry when generating code from `build.rs`.
 

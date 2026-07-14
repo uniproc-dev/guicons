@@ -32,4 +32,19 @@ mod tests {
             other => panic!("expected svg icon data, got {other:?}"),
         }
     }
+
+    /// `icon!("set:name")` never touches `icons.gui.toml` - it resolves
+    /// straight through the on-disk cache (pre-seeded here at
+    /// `.cache/guicons/testset/gear.svg` so this test needs no network
+    /// access), and returns `IconData` directly rather than an `IconKey`.
+    #[test]
+    fn icon_macro_resolves_a_bare_iconify_literal_from_cache() {
+        match guicons::icon!("testset:gear") {
+            guicons::IconData::Svg(bytes) => {
+                assert!(bytes.starts_with(b"<svg"));
+                assert!(String::from_utf8_lossy(bytes).contains("circle"));
+            }
+            other => panic!("expected svg icon data, got {other:?}"),
+        }
+    }
 }

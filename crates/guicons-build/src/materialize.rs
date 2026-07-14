@@ -1,6 +1,6 @@
-use super::cache::{ensure_cached, iconify_cache_path, iconify_url, url_cache_path};
+use super::paths::{canonicalize_existing, current_dir};
 use super::{IconEntrySource, IconManifest};
-use super::paths::canonicalize_existing;
+use guicons_net::{ensure_cached, iconify_cache_path, iconify_url, url_cache_path};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,7 +46,7 @@ pub fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -> Vec<M
                 }
                 IconEntrySource::Iconify(id) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
-                    let cached = iconify_cache_path(id);
+                    let cached = iconify_cache_path(&current_dir(), id);
                     ensure_cached(&cached, &iconify_url(id));
                     copy_if_changed(&cached, &output_path);
                     MaterializedIconBackend::Image {
@@ -56,7 +56,7 @@ pub fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -> Vec<M
                 }
                 IconEntrySource::Url(url) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
-                    let cached = url_cache_path(url);
+                    let cached = url_cache_path(&current_dir(), url);
                     ensure_cached(&cached, url);
                     copy_if_changed(&cached, &output_path);
                     MaterializedIconBackend::Image {

@@ -1,11 +1,8 @@
 //! Manifest-driven icon system for native Rust GUI applications.
 //!
-//! `guicons` is split into a small runtime API and optional build-time helpers.
-//! Enable the `build` feature from `build.rs` to parse `icons.gui.toml`,
-//! materialize SVG assets, and generate Rust/Slint registries.
-
-#[cfg(feature = "build")]
-pub mod build;
+//! `guicons` is the runtime API. Build-time codegen (parsing `icons.gui.toml`,
+//! materializing SVG assets, generating Rust/Slint registries) lives in the
+//! separate `guicons-build` crate, used from `build.rs`.
 
 #[cfg(feature = "slint")]
 pub mod slint;

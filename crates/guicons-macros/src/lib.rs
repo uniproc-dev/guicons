@@ -23,10 +23,19 @@ struct IconMacroInput {
     module: Ident,
 }
 
+/// `guicons::icon!` accepts two unrelated shapes of selector:
+///
+/// - `family`/`family.variant`/`"family/variant"` - resolved against
+///   `icons.gui.toml`, expands to a `keys::` constant (an `IconKey`).
+/// - `"set:name"` (a raw iconify id, straight off iconify.design) - resolved
+///   through `guicons-net`'s cache directly, with **no manifest lookup at
+///   all**, expanding to `IconData` instead. Adding the same id to the
+///   manifest later doesn't change what an existing call site resolves to:
+///   both paths key the on-disk cache by the exact same string.
 #[derive(Clone, Debug)]
-struct IconSelector {
-    family: String,
-    variant: Option<String>,
+enum IconSelector {
+    FamilyVariant { family: String, variant: Option<String> },
+    Iconify(String),
 }
 
 impl Parse for IconMacroInput {
@@ -59,38 +68,61 @@ impl Parse for IconMacroInput {
 }
 
 fn expand_icon(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
-    let manifest_path = manifest_path()?;
+    match input.selector {
+        IconSelector::FamilyVariant { family, variant } => {
+            expand_family_variant(&family, variant.as_deref(), input.module)
+        }
+        IconSelector::Iconify(id) => expand_iconify_literal(&id),
+    }
+}
+
+fn expand_family_variant(
+    family: &str,
+    variant: Option<&str>,
+    module: Ident,
+) -> Result<proc_macro2::TokenStream> {
+    let manifest_path = manifest_dir()?.join("icons.gui.toml");
     let manifest = load_manifest(&manifest_path)?;
-    let key = match manifest.entry_for_family_variant(
-        &input.selector.family,
-        input.selector.variant.as_deref(),
-    ) {
+    let key = match manifest.entry_for_family_variant(family, variant) {
         Some(entry) => entry.key().to_string(),
         None => {
             return Err(Error::new(
                 Span::call_site(),
-                unknown_icon_message(&manifest, &input.selector),
+                unknown_icon_message(&manifest, family, variant),
             ));
         }
     };
 
-    let module = input.module;
     let key_ident = Ident::new(&guicons_core::rust_const_name(&key), Span::call_site());
     Ok(quote! { #module::keys::#key_ident })
 }
 
+/// Resolves a raw `"set:name"` iconify id straight through `guicons-net`'s
+/// cache - no manifest, no registry, just the SVG bytes for this one icon.
+fn expand_iconify_literal(id: &str) -> Result<proc_macro2::TokenStream> {
+    let start = manifest_dir()?;
+    let cache_path = guicons_net::iconify_cache_path(&start, id);
+    guicons_net::ensure_cached(&cache_path, &guicons_net::iconify_url(id));
+    let path = cache_path.to_string_lossy().into_owned();
+    Ok(quote! { guicons::IconData::Svg(include_bytes!(#path)) })
+}
+
 fn parse_selector_literal(literal: &LitStr) -> Result<IconSelector> {
-    parse_resource_selector(&literal.value()).map_err(|message| Error::new_spanned(literal, message))
+    let value = literal.value();
+    if value.contains(':') {
+        return Ok(IconSelector::Iconify(value));
+    }
+    parse_resource_selector(&value).map_err(|message| Error::new_spanned(literal, message))
 }
 
 fn parse_selector_path(segments: Punctuated<Ident, Token![.]>) -> Result<IconSelector> {
     let segments = segments.into_iter().collect::<Vec<_>>();
     match segments.as_slice() {
-        [family] => Ok(IconSelector {
+        [family] => Ok(IconSelector::FamilyVariant {
             family: family.to_string().replace('_', "-"),
             variant: None,
         }),
-        [family, variant] => Ok(IconSelector {
+        [family, variant] => Ok(IconSelector::FamilyVariant {
             family: family.to_string().replace('_', "-"),
             variant: Some(variant.to_string().replace('_', "-")),
         }),
@@ -111,7 +143,7 @@ fn parse_resource_selector(input: &str) -> std::result::Result<IconSelector, Str
         resource_segment,
         opt(preceded(literal("/"), resource_segment)),
     )
-        .map(|(family, variant)| IconSelector { family, variant });
+        .map(|(family, variant)| IconSelector::FamilyVariant { family, variant });
     let mut input = input;
     let selector = parser
         .parse_next(&mut input)
@@ -132,10 +164,10 @@ fn resource_segment(input: &mut &str) -> WinnowResult<String> {
         .parse_next(input)
 }
 
-fn manifest_path() -> Result<PathBuf> {
+fn manifest_dir() -> Result<PathBuf> {
     let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
         .ok_or_else(|| Error::new(Span::call_site(), "CARGO_MANIFEST_DIR is not set"))?;
-    Ok(PathBuf::from(manifest_dir).join("icons.gui.toml"))
+    Ok(PathBuf::from(manifest_dir))
 }
 
 fn load_manifest(path: &std::path::Path) -> Result<guicons_core::IconManifest> {
@@ -164,15 +196,19 @@ fn load_manifest(path: &std::path::Path) -> Result<guicons_core::IconManifest> {
     Ok(manifest)
 }
 
-fn unknown_icon_message(manifest: &guicons_core::IconManifest, selector: &IconSelector) -> String {
-    let display = match &selector.variant {
-        Some(variant) => format!("{}/{}", selector.family, variant),
-        None => selector.family.clone(),
+fn unknown_icon_message(
+    manifest: &guicons_core::IconManifest,
+    family: &str,
+    variant: Option<&str>,
+) -> String {
+    let display = match variant {
+        Some(variant) => format!("{family}/{variant}"),
+        None => family.to_string(),
     };
     let variants = manifest
         .entries()
         .iter()
-        .filter(|entry| entry.family() == selector.family)
+        .filter(|entry| entry.family() == family)
         .filter_map(|entry| entry.variant())
         .collect::<Vec<_>>();
 
@@ -180,8 +216,7 @@ fn unknown_icon_message(manifest: &guicons_core::IconManifest, selector: &IconSe
         format!("unknown guicons icon `{display}`")
     } else {
         format!(
-            "unknown guicons icon `{display}`; known variants for `{}`: {}",
-            selector.family,
+            "unknown guicons icon `{display}`; known variants for `{family}`: {}",
             variants.join(", ")
         )
     }

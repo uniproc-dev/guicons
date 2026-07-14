@@ -1,0 +1,40 @@
+---
+source: crates/guicons-build/src/generate.rs
+expression: generate_builders(&icons)
+---
+pub struct Settings20VariantBuilder;
+
+impl Settings20VariantBuilder {
+    pub const fn filled(self) -> IconKey {
+        keys::SETTINGS_20_FILLED
+    }
+    pub const fn regular(self) -> IconKey {
+        keys::SETTINGS_20_REGULAR
+    }
+}
+
+pub struct Settings24VariantBuilder;
+
+impl Settings24VariantBuilder {
+    pub const fn filled(self) -> IconKey {
+        keys::SETTINGS_24_FILLED
+    }
+    pub const fn regular(self) -> IconKey {
+        keys::SETTINGS_24_REGULAR
+    }
+}
+
+pub struct SettingsBuilder;
+
+pub const fn settings() -> SettingsBuilder {
+    SettingsBuilder
+}
+
+impl SettingsBuilder {
+    pub const fn size_20(self) -> Settings20VariantBuilder {
+        Settings20VariantBuilder
+    }
+    pub const fn size_24(self) -> Settings24VariantBuilder {
+        Settings24VariantBuilder
+    }
+}

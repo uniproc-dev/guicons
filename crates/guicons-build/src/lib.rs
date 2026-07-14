@@ -1,4 +1,3 @@
-mod cache;
 mod generate;
 mod materialize;
 mod paths;
@@ -7,9 +6,8 @@ use std::path::PathBuf;
 
 pub use generate::generate_rust_icon_registry;
 pub use guicons_core::{IconEntry, IconEntrySource, IconManifest};
+pub use guicons_net::ALLOW_NETWORK_ENV;
 pub use materialize::{materialize_icons, ImageKind, MaterializedIcon, MaterializedIconBackend};
-
-pub(crate) const ALLOW_NETWORK_ENV: &str = "GUICONS_ALLOW_NETWORK";
 
 pub fn load_icon_manifest(manifest_path: &std::path::Path) -> IconManifest {
     let (manifest, errors) = guicons_core::load_icon_manifest(manifest_path);

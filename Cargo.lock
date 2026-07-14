@@ -1625,15 +1625,19 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 name = "guicons"
 version = "0.1.0"
 dependencies = [
- "guicons-core",
  "guicons-macros",
+ "slint",
+]
+
+[[package]]
+name = "guicons-build"
+version = "0.1.0"
+dependencies = [
+ "guicons-core",
+ "guicons-net",
  "insta",
  "pathdiff",
- "sha2",
- "slint",
  "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "ureq",
 ]
 
 [[package]]
@@ -1650,10 +1654,20 @@ name = "guicons-macros"
 version = "0.1.0"
 dependencies = [
  "guicons-core",
+ "guicons-net",
  "proc-macro2",
  "quote",
  "syn",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "guicons-net"
+version = "0.1.0"
+dependencies = [
+ "guicons-core",
+ "sha2",
+ "ureq",
 ]
 
 [[package]]
@@ -3938,7 +3952,7 @@ dependencies = [
  "regex",
  "serde_json",
  "tar",
- "toml 1.1.2+spec-1.1.0",
+ "toml",
 ]
 
 [[package]]
@@ -4415,21 +4429,6 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "toml"
-version = "0.9.12+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf92845e79fc2e2def6a5d828f0801e29a2f8acc037becc5ab08595c7d5e9863"
-dependencies = [
- "indexmap",
- "serde_core",
- "serde_spanned",
- "toml_datetime 0.7.5+spec-1.1.0",
- "toml_parser",
- "toml_writer",
- "winnow 0.7.15",
-]
-
-[[package]]
-name = "toml"
 version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81f3d15e84cbcd896376e6730314d59fb5a87f31e4b038454184435cd57defee"
@@ -4437,7 +4436,7 @@ dependencies = [
  "indexmap",
  "serde_core",
  "serde_spanned",
- "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
  "toml_writer",
  "winnow 1.0.3",
@@ -4450,15 +4449,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f22ba417d437b5fa5dcba6c27dbd6c14f38845315b724d89fed73b7a426451b7"
 dependencies = [
  "smallvec",
-]
-
-[[package]]
-name = "toml_datetime"
-version = "0.7.5+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
-dependencies = [
- "serde_core",
 ]
 
 [[package]]
@@ -4477,7 +4467,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2153edc6955a6c354fad8f5efd38b6a8769bdccf9fe50f8e1329f81b0baa5d7"
 dependencies = [
  "indexmap",
- "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_datetime",
  "toml_parser",
  "winnow 1.0.3",
 ]

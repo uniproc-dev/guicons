@@ -1,0 +1,15 @@
+[package]
+name = "guicons-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "build.rs codegen: parses icons.gui.toml, materializes assets, generates Rust/Slint registries"
+
+[dependencies]
+guicons-core = { path = "../guicons-core" }
+guicons-net = { path = "../guicons-net" }
+pathdiff = "0.2.3"
+
+[dev-dependencies]
+insta = "1.48.0"
+tempfile = "3.23.0"

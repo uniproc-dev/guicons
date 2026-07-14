@@ -10,6 +10,7 @@ proc-macro = true
 
 [dependencies]
 guicons-core = { path = "../guicons-core" }
+guicons-net = { path = "../guicons-net" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["parsing", "proc-macro"] }

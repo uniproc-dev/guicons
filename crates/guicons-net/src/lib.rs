@@ -1,23 +1,32 @@
-use super::paths::{current_dir, find_workspace_root_from_cwd};
-use super::ALLOW_NETWORK_ENV;
+//! Icon cache resolution and network fetch, shared by `guicons-build`'s
+//! codegen (materializing icons declared in `icons.gui.toml`) and
+//! `guicons-macros`' `icon!("set:name")` literal form (embedding an icon
+//! that isn't declared in any manifest at all). Both key the same on-disk
+//! cache by the exact same string (an iconify id, or a URL), so adding an
+//! icon to the manifest later doesn't change what an existing `icon!(...)`
+//! call site resolves to - they just happen to share a cache entry.
+
+use guicons_core::{canonicalize_or_self, find_workspace_root_from};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn iconify_cache_path(id: &str) -> PathBuf {
+pub const ALLOW_NETWORK_ENV: &str = "GUICONS_ALLOW_NETWORK";
+
+pub fn iconify_cache_path(start: &Path, id: &str) -> PathBuf {
     let (provider, name) = id
         .split_once(':')
         .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"));
-    workspace_cache_dir().join(provider).join(format!("{name}.svg"))
+    workspace_cache_dir(start).join(provider).join(format!("{name}.svg"))
 }
 
-pub(crate) fn url_cache_path(url: &str) -> PathBuf {
-    workspace_cache_dir().join("url").join(format!("{}.svg", sha256_hex(url)))
+pub fn url_cache_path(start: &Path, url: &str) -> PathBuf {
+    workspace_cache_dir(start).join("url").join(format!("{}.svg", sha256_hex(url)))
 }
 
-pub(crate) fn ensure_cached(cache_path: &Path, url: &str) {
+pub fn ensure_cached(cache_path: &Path, url: &str) {
     if cache_path.exists() {
         return;
     }
@@ -42,16 +51,16 @@ pub(crate) fn ensure_cached(cache_path: &Path, url: &str) {
         .unwrap_or_else(|e| panic!("Failed to write cache file {}: {e}", cache_path.display()));
 }
 
-pub(crate) fn iconify_url(id: &str) -> String {
+pub fn iconify_url(id: &str) -> String {
     let (set, name) = id
         .split_once(':')
         .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"));
     format!("https://api.iconify.design/{set}/{name}.svg")
 }
 
-fn workspace_cache_dir() -> PathBuf {
-    find_workspace_root_from_cwd()
-        .unwrap_or_else(current_dir)
+fn workspace_cache_dir(start: &Path) -> PathBuf {
+    find_workspace_root_from(start)
+        .unwrap_or_else(|| canonicalize_or_self(start))
         .join(".cache")
         .join("guicons")
 }
