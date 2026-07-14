@@ -1,0 +1,21 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: entries
+---
+[
+    IconEntry {
+        key: "settings-filled",
+        family: "settings",
+        variant: Some(
+            "filled",
+        ),
+        size: Some(
+            24,
+        ),
+        source: Iconify(
+            "fluent:settings-24-filled",
+        ),
+        dynamic: false,
+        windows_ico: None,
+    },
+]

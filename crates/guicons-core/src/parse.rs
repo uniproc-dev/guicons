@@ -23,14 +23,16 @@ const ENTRY_KEYS: &[&str] = &[
 ];
 pub(crate) const RESERVED_TOP_LEVEL: &[&str] = &["defaults", "include", "providers"];
 
-/// Checks that any of the reserved top-level sections present in `table` are
-/// actually tables. Purely a shape check - it doesn't parse their contents.
+/// Checks that `[providers]` is a table, if present.
+///
+/// This is the only reserved top-level section without its own shape check
+/// elsewhere: `[defaults]` is validated by `parse_defaults`, `[include]` by
+/// `collect_includes` in `crate::load` - checking them here too would just
+/// report the same "must be a table" error twice.
 pub(crate) fn check_reserved_top_level(table: &Table<'_>, diags: &mut Diagnostics) {
-    for reserved in RESERVED_TOP_LEVEL.iter().copied() {
-        if let Some(value) = table.get(reserved) {
-            if value.as_table().is_none() {
-                diags.error(Some(value.span.into()), format!("`[{reserved}]` must be a table"));
-            }
+    if let Some(value) = table.get("providers") {
+        if value.as_table().is_none() {
+            diags.error(Some(value.span.into()), "`[providers]` must be a table");
         }
     }
 }
@@ -359,14 +361,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].key(), "settings");
-        assert_eq!(entries[0].family(), "settings");
-        assert_eq!(entries[0].variant(), None);
-        assert_eq!(
-            entries[0].source(),
-            &IconEntrySource::File(workspace_root().join("settings.svg"))
-        );
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]
@@ -380,14 +375,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        let mut keys: Vec<_> = entries.iter().map(|e| e.key().to_string()).collect();
-        keys.sort();
-        assert_eq!(keys, vec!["settings-filled", "settings-regular"]);
-        assert!(entries.iter().all(|e| e.family() == "settings"));
-        assert_eq!(
-            entries.iter().find(|e| e.key() == "settings-filled").unwrap().variant(),
-            Some("filled")
-        );
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]
@@ -400,8 +388,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].key(), "icons-navigation-back");
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]
@@ -415,8 +402,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("unexpected keys"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -430,8 +416,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("found 2"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -444,8 +429,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("found 0"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -459,8 +443,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("expected"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -473,8 +456,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("must be a table"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -487,8 +469,7 @@ mod tests {
             with_root(),
         );
         assert!(entries.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("must be an inline table"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -506,11 +487,7 @@ mod tests {
             defaults,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(
-            entries[0].source(),
-            &IconEntrySource::Iconify("fluent:settings-24-filled".to_string())
-        );
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]
@@ -527,10 +504,7 @@ mod tests {
             defaults,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(
-            entries[0].source(),
-            &IconEntrySource::Iconify("phosphor:gear".to_string())
-        );
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]
@@ -543,21 +517,14 @@ mod tests {
             "#,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(
-            defaults.roots,
-            vec![
-                workspace_root().join("a"),
-                workspace_root().join("b"),
-                workspace_root().join("c"),
-            ]
-        );
+        insta::assert_debug_snapshot!(defaults);
     }
 
     #[test]
     fn defaults_fall_back_to_manifest_and_workspace_dirs_when_empty() {
         let (defaults, errors) = defaults_for("");
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(defaults.roots, vec![workspace_root(), workspace_root()]);
+        insta::assert_debug_snapshot!(defaults);
     }
 
     #[test]
@@ -568,8 +535,7 @@ mod tests {
             bogus = 1
             "#,
         );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("unexpected keys"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]
@@ -580,7 +546,6 @@ mod tests {
             size = "big"
             "#,
         );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("expected u16"), "{errors:?}");
+        insta::assert_debug_snapshot!(errors);
     }
 }

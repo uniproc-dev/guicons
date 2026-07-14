@@ -1,0 +1,16 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_errors(dir.path(), &errors)"
+---
+[
+    ErrorSummary {
+        file: "icons.gui.toml",
+        span: Some(
+            (
+                33,
+                34,
+            ),
+        ),
+        message: "`include.nav` must be a string",
+    },
+]

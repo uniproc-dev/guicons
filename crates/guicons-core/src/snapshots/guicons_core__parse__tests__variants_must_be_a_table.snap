@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`variants` in `settings` must be a table",
+]

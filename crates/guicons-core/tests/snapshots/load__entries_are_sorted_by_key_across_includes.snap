@@ -1,0 +1,33 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_entries(dir.path(), manifest.entries())"
+---
+[
+    EntrySummary {
+        key: "alpha",
+        family: "alpha",
+        variant: None,
+        dynamic: false,
+        source: File(
+            "a.svg",
+        ),
+    },
+    EntrySummary {
+        key: "middle",
+        family: "middle",
+        variant: None,
+        dynamic: false,
+        source: File(
+            "icons/middle.svg",
+        ),
+    },
+    EntrySummary {
+        key: "zebra",
+        family: "zebra",
+        variant: None,
+        dynamic: false,
+        source: File(
+            "z.svg",
+        ),
+    },
+]

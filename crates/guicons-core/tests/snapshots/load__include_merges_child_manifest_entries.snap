@@ -1,0 +1,24 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_entries(dir.path(), manifest.entries())"
+---
+[
+    EntrySummary {
+        key: "back",
+        family: "back",
+        variant: None,
+        dynamic: false,
+        source: File(
+            "icons/back.svg",
+        ),
+    },
+    EntrySummary {
+        key: "logo",
+        family: "logo",
+        variant: None,
+        dynamic: false,
+        source: File(
+            "logo.svg",
+        ),
+    },
+]

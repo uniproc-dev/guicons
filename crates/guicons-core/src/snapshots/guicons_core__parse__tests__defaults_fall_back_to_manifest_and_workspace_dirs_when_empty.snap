@@ -1,0 +1,12 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: defaults
+---
+ManifestDefaults {
+    roots: [
+        "/workspace",
+        "/workspace",
+    ],
+    provider: None,
+    size: None,
+}

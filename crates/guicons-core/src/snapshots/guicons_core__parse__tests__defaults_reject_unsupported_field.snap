@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "unexpected keys in table: `[(\"bogus\", Span { start: 36, end: 41 })]`\nexpected: [\"root\", \"roots\", \"provider\", \"size\"]",
+]

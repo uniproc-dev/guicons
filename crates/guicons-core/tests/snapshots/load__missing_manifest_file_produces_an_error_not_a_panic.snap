@@ -1,0 +1,11 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_errors(dir.path(), &errors)"
+---
+[
+    ErrorSummary {
+        file: "does-not-exist.gui.toml",
+        span: None,
+        message: "failed to read file: The system cannot find the file specified. (os error 2)",
+    },
+]

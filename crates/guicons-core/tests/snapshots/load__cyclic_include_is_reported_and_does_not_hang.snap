@@ -1,0 +1,11 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_errors(dir.path(), &errors)"
+---
+[
+    ErrorSummary {
+        file: "a.gui.toml",
+        span: None,
+        message: "recursive icon manifest include",
+    },
+]

@@ -1,0 +1,32 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: entries
+---
+[
+    IconEntry {
+        key: "settings-filled",
+        family: "settings",
+        variant: Some(
+            "filled",
+        ),
+        size: None,
+        source: File(
+            "/workspace\\settings-filled.svg",
+        ),
+        dynamic: false,
+        windows_ico: None,
+    },
+    IconEntry {
+        key: "settings-regular",
+        family: "settings",
+        variant: Some(
+            "regular",
+        ),
+        size: None,
+        source: File(
+            "/workspace\\settings-regular.svg",
+        ),
+        dynamic: false,
+        windows_ico: None,
+    },
+]

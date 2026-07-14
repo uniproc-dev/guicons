@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "icon manifest entry `settings` must define exactly one source (file/iconify/url/glyph), found 2",
+]
