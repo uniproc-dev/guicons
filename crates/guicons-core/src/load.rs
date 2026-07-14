@@ -6,9 +6,10 @@
 //! [`crate::parse`]'s job.
 
 use crate::diagnostics::{Diagnostics, ManifestError};
-use crate::model::{IconEntry, IconManifest};
-use crate::parse::{collect_entries, parse_defaults, parse_providers};
+use crate::model::{IconEntry, IconManifest, ProviderSchema};
+use crate::parse::{collect_entries, parse_defaults, parse_providers, resolve_providers};
 use crate::paths::{canonicalize_or_self, find_workspace_root, resolve_entry_path};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_span::value::{Table, ValueInner};
@@ -136,16 +137,21 @@ fn load_icon_manifest_inner(
     };
 
     let providers_value = root_table.remove("providers");
-    let providers = {
+    let own_providers = {
         let mut diags = Diagnostics {
             file: &manifest_path,
             errors,
         };
-        parse_providers(providers_value, &mut diags)
+        let declarations = parse_providers(providers_value, &mut diags);
+        resolve_providers(declarations, &mut diags)
     };
 
     let mut entries = Vec::new();
-    collect_includes(&root_table, &manifest_path, seen, source_paths, errors, &mut entries);
+    let mut providers = HashMap::new();
+    collect_includes(&root_table, &manifest_path, seen, source_paths, errors, &mut entries, &mut providers);
+    // A file's own `[providers.*]` take precedence over anything an
+    // `[include]`d file declared under the same name.
+    providers.extend(own_providers);
 
     {
         let mut diags = Diagnostics {
@@ -180,7 +186,8 @@ fn collect_includes(
     seen: &mut Vec<PathBuf>,
     source_paths: &mut Vec<PathBuf>,
     errors: &mut Vec<ManifestError>,
-    acc: &mut Vec<IconEntry>,
+    entries_acc: &mut Vec<IconEntry>,
+    providers_acc: &mut HashMap<String, ProviderSchema>,
 ) {
     let Some(include_value) = table.get("include") else {
         return;
@@ -207,6 +214,7 @@ fn collect_includes(
         };
         let child = resolve_entry_path(base, path);
         let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors);
-        acc.extend(child_manifest.entries);
+        entries_acc.extend(child_manifest.entries);
+        providers_acc.extend(child_manifest.providers);
     }
 }

@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`providers.acme.override` used, but `acme` isn't a built-in provider",
+]

@@ -1,9 +1,21 @@
 [defaults]
 root = "assets"
 
+[providers.phosphor]
+variants = ["thin", "light", "bold", "fill", "duotone"]
+
+[providers.bootstrap]
+variants = ["fill"]
+
+[include]
+extra = "icons/extra.gui.toml"
+
 [settings]
 variants.filled = { file = "settings-filled.svg" }
 variants.regular = { file = "settings-regular.svg" }
 
 [docker]
 file = "docker.svg"
+
+[spinner]
+glyph = "FixtureIconFont:U+E001"

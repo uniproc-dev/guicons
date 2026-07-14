@@ -3,8 +3,7 @@ use proc_macro2::{Ident, Span};
 use quote::quote;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, Error, LitStr, Result, Token};
-use syn::punctuated::Punctuated;
+use syn::{parse_macro_input, Error, LitInt, LitStr, Result, Token};
 use winnow::ascii::alphanumeric1;
 use winnow::combinator::{opt, preceded, repeat};
 use winnow::token::{literal, one_of};
@@ -24,12 +23,19 @@ struct IconMacroInput {
 }
 
 /// `guicons::icon!` accepts two unrelated selector shapes:
-/// `family`/`family.variant` resolves against `icons.gui.toml` to an
-/// `IconKey`; `"set:name"` (a raw iconify id) resolves through
-/// `guicons-net`'s cache with no manifest lookup, to `IconData` instead.
+/// `family`/`family.variant`/`family.size.variant`/`family.size` resolves
+/// against `icons.gui.toml` to an `IconKey` (the `size` segment is only
+/// needed when a family has the same variant at more than one size -
+/// otherwise it's redundant and can be left off); `"set:name"` (a raw
+/// iconify id) resolves through `guicons-net`'s cache with no manifest
+/// lookup, to `IconData` instead.
 #[derive(Clone, Debug)]
 enum IconSelector {
-    FamilyVariant { family: String, variant: Option<String> },
+    FamilyVariant {
+        family: String,
+        size: Option<u16>,
+        variant: Option<String>,
+    },
     Iconify(String),
 }
 
@@ -39,8 +45,7 @@ impl Parse for IconMacroInput {
             let literal: LitStr = input.parse()?;
             parse_selector_literal(&literal)?
         } else {
-            let segments = Punctuated::<Ident, Token![.]>::parse_separated_nonempty(input)?;
-            parse_selector_path(segments)?
+            parse_selector_path(input)?
         };
 
         let mut module = Ident::new("icons", Span::call_site());
@@ -64,8 +69,8 @@ impl Parse for IconMacroInput {
 
 fn expand_icon(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
     match input.selector {
-        IconSelector::FamilyVariant { family, variant } => {
-            expand_family_variant(&family, variant.as_deref(), input.module)
+        IconSelector::FamilyVariant { family, size, variant } => {
+            expand_family_variant(&family, size, variant.as_deref(), input.module)
         }
         IconSelector::Iconify(id) => expand_iconify_literal(&id),
     }
@@ -73,17 +78,18 @@ fn expand_icon(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
 
 fn expand_family_variant(
     family: &str,
+    size: Option<u16>,
     variant: Option<&str>,
     module: Ident,
 ) -> Result<proc_macro2::TokenStream> {
     let manifest_path = manifest_dir()?.join("icons.gui.toml");
     let manifest = load_manifest(&manifest_path)?;
-    let key = match manifest.entry_for_family_variant(family, variant) {
+    let key = match manifest.entry_for_family_variant(family, size, variant) {
         Some(entry) => entry.key().to_string(),
         None => {
             return Err(Error::new(
                 Span::call_site(),
-                unknown_icon_message(&manifest, family, variant),
+                unknown_icon_message(&manifest, family, size, variant),
             ));
         }
     };
@@ -108,43 +114,97 @@ fn parse_selector_literal(literal: &LitStr) -> Result<IconSelector> {
     parse_resource_selector(&value).map_err(|message| Error::new_spanned(literal, message))
 }
 
-fn parse_selector_path(segments: Punctuated<Ident, Token![.]>) -> Result<IconSelector> {
-    let segments = segments.into_iter().collect::<Vec<_>>();
-    match segments.as_slice() {
-        [family] => Ok(IconSelector::FamilyVariant {
-            family: family.to_string().replace('_', "-"),
-            variant: None,
-        }),
-        [family, variant] => Ok(IconSelector::FamilyVariant {
-            family: family.to_string().replace('_', "-"),
-            variant: Some(variant.to_string().replace('_', "-")),
-        }),
-        _ => {
-            let mut iter = segments.iter();
-            let first = iter.next().unwrap();
-            let span = iter.fold(first.span(), |s, seg| s.join(seg.span()).unwrap_or(s));
-            Err(Error::new(
-                span,
-                "expected `family`, `family.variant`, or a string literal like \"family/variant\"",
-            ))
+/// One dot-separated segment of the path form (`family.24.filled`). `24`
+/// lexes as a `LitInt`, not an `Ident`, so this can't just be
+/// `Punctuated<Ident, Token![.]>` - each segment is read as either.
+enum PathSegment {
+    Ident(String),
+    Size(u16),
+}
+
+fn parse_selector_path(input: ParseStream<'_>) -> Result<IconSelector> {
+    let mut segments = Vec::new();
+    loop {
+        if input.peek(LitInt) {
+            let lit: LitInt = input.parse()?;
+            let value = lit
+                .base10_parse::<u16>()
+                .map_err(|_| Error::new_spanned(&lit, "size must fit in a u16"))?;
+            segments.push(PathSegment::Size(value));
+        } else {
+            let ident: Ident = input.parse()?;
+            segments.push(PathSegment::Ident(ident.to_string().replace('_', "-")));
+        }
+        if input.peek(Token![.]) {
+            input.parse::<Token![.]>()?;
+        } else {
+            break;
         }
     }
+    classify_segments(segments)
+}
+
+/// Interprets `[family]` / `[family, variant]` / `[family, size]` /
+/// `[family, size, variant]` - a `Size` segment always comes before an
+/// `Ident` (variant) segment, matching how `default_iconify_id` builds
+/// `family-size-variant`.
+fn classify_segments(segments: Vec<PathSegment>) -> Result<IconSelector> {
+    let mut iter = segments.into_iter();
+    let Some(PathSegment::Ident(family)) = iter.next() else {
+        return Err(Error::new(
+            Span::call_site(),
+            "expected a family name, e.g. `settings` or `settings.filled`",
+        ));
+    };
+
+    let mut size = None;
+    let mut variant = None;
+    for segment in iter {
+        match segment {
+            PathSegment::Size(value) if size.is_none() && variant.is_none() => size = Some(value),
+            PathSegment::Ident(name) if variant.is_none() => variant = Some(name),
+            _ => {
+                return Err(Error::new(
+                    Span::call_site(),
+                    "expected `family`, `family.variant`, `family.size`, or `family.size.variant`",
+                ));
+            }
+        }
+    }
+
+    Ok(IconSelector::FamilyVariant { family, size, variant })
 }
 
 fn parse_resource_selector(input: &str) -> std::result::Result<IconSelector, String> {
     let mut parser = (
         resource_segment,
         opt(preceded(literal("/"), resource_segment)),
-    )
-        .map(|(family, variant)| IconSelector::FamilyVariant { family, variant });
-    let mut input = input;
-    let selector = parser
-        .parse_next(&mut input)
-        .map_err(|_| "expected icon selector like `settings` or `settings/filled`".to_string())?;
-    if !input.is_empty() {
-        return Err(format!("unexpected trailing input `{input}` in icon selector"));
+        opt(preceded(literal("/"), resource_segment)),
+    );
+    let mut input_rest = input;
+    let (family, second, third) = parser.parse_next(&mut input_rest).map_err(|_| {
+        "expected icon selector like `settings`, `settings/filled`, or `settings/24/filled`".to_string()
+    })?;
+    if !input_rest.is_empty() {
+        return Err(format!("unexpected trailing input `{input_rest}` in icon selector"));
     }
-    Ok(selector)
+
+    let (size, variant) = match (second, third) {
+        (None, None) => (None, None),
+        (Some(only), None) => match only.parse::<u16>() {
+            Ok(size) => (Some(size), None),
+            Err(_) => (None, Some(only)),
+        },
+        (Some(size_segment), Some(variant)) => {
+            let size = size_segment
+                .parse::<u16>()
+                .map_err(|_| format!("expected a numeric size before the variant, got `{size_segment}`"))?;
+            (Some(size), Some(variant))
+        }
+        (None, Some(_)) => unreachable!("winnow's `opt` chain can't produce a third segment without a second"),
+    };
+
+    Ok(IconSelector::FamilyVariant { family, size, variant })
 }
 
 fn resource_segment(input: &mut &str) -> WinnowResult<String> {
@@ -192,16 +252,23 @@ fn load_manifest(path: &std::path::Path) -> Result<guicons_core::IconManifest> {
 fn unknown_icon_message(
     manifest: &guicons_core::IconManifest,
     family: &str,
+    size: Option<u16>,
     variant: Option<&str>,
 ) -> String {
-    let display = match variant {
-        Some(variant) => format!("{family}/{variant}"),
-        None => family.to_string(),
-    };
+    let mut display = family.to_string();
+    if let Some(size) = size {
+        display.push('/');
+        display.push_str(&size.to_string());
+    }
+    if let Some(variant) = variant {
+        display.push('/');
+        display.push_str(variant);
+    }
+
     let variants = manifest
         .entries()
         .iter()
-        .filter(|entry| entry.family() == family)
+        .filter(|entry| entry.family() == family && entry.size() == size)
         .filter_map(|entry| entry.variant())
         .collect::<Vec<_>>();
 
@@ -209,7 +276,8 @@ fn unknown_icon_message(
         format!("unknown guicons icon `{display}`")
     } else {
         format!(
-            "unknown guicons icon `{display}`; known variants for `{family}`: {}",
+            "unknown guicons icon `{display}`; known variants for `{family}`{}: {}",
+            size.map(|size| format!("/{size}")).unwrap_or_default(),
             variants.join(", ")
         )
     }

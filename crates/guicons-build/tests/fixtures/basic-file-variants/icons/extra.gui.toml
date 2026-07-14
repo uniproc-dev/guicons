@@ -1,0 +1,15 @@
+[defaults]
+root = "assets"
+
+[toolbar.16]
+variants.filled = { file = "toolbar-16-filled.svg" }
+
+[toolbar.24]
+variants.filled = { file = "toolbar-24-filled.svg" }
+variants.regular = { file = "toolbar-24-regular.svg" }
+
+[logo.16]
+file = "logo-16.svg"
+
+[logo.32]
+file = "logo-32.svg"

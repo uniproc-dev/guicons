@@ -1,0 +1,31 @@
+# Built-in provider schemas, shipped with guicons-core and parsed through the
+# exact same code path as a user's own [providers.*] section (see
+# `parse::builtin_providers`) - not hardcoded as Rust structs.
+#
+# This is the *value* a `[providers]` table would have, so each top-level
+# table here is a provider name, same shape as `[providers.<name>]` in a
+# real manifest.
+#
+# Naming conventions verified against api.iconify.design/collection - they
+# genuinely differ per provider (some have no size axis, some have an
+# unsuffixed default variant, some stack multiple suffix tokens).
+
+[fluent]
+variants = ["regular", "filled"]
+sizes = [16, 20, 24, 28, 32, 48]
+
+[ph]
+variants = ["thin", "light", "bold", "fill", "duotone"]
+
+[material-symbols]
+variants = ["outline", "rounded", "sharp", "outline-rounded", "outline-sharp"]
+
+[heroicons]
+variants = ["solid"]
+sizes = [16, 20]
+
+[bi]
+variants = ["fill"]
+
+[tabler]
+variants = ["filled"]

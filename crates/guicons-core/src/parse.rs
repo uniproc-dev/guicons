@@ -276,10 +276,19 @@ pub(crate) fn parse_defaults(
     }
 }
 
+/// A single `[providers.<name>]` (or `[providers.<name>.override]`) entry,
+/// before it's checked against the builtin set - that check needs
+/// `resolve_providers`, which knows about builtins; this only knows what
+/// shape the TOML was in.
+pub(crate) enum ProviderDeclaration {
+    Full { schema: ProviderSchema, span: toml_span::Span },
+    Override { variants: Option<Vec<String>>, sizes: Option<Vec<u16>>, span: toml_span::Span },
+}
+
 pub(crate) fn parse_providers(
     providers_value: Option<Value<'_>>,
     diags: &mut Diagnostics,
-) -> HashMap<String, ProviderSchema> {
+) -> HashMap<String, ProviderDeclaration> {
     let Some(mut providers_value) = providers_value else {
         return HashMap::new();
     };
@@ -293,13 +302,41 @@ pub(crate) fn parse_providers(
     for (name_key, mut value) in table {
         let name = name_key.name.to_string();
         let entry_span = value.span;
-        let Some(entry_table) = take_table(&mut value) else {
+        let Some(mut entry_table) = take_table(&mut value) else {
             diags.error(
                 Some(entry_span.into()),
                 format!("`providers.{name}` must be a table"),
             );
             continue;
         };
+
+        if let Some(mut override_value) = entry_table.remove("override") {
+            if !entry_table.is_empty() {
+                diags.error(
+                    Some(entry_span.into()),
+                    format!(
+                        "`providers.{name}` can't mix its own fields with `providers.{name}.override` - use one or the other"
+                    ),
+                );
+                continue;
+            }
+            let override_span = override_value.span;
+            let Some(override_table) = take_table(&mut override_value) else {
+                diags.error(Some(override_span.into()), format!("`providers.{name}.override` must be a table"));
+                continue;
+            };
+
+            let mut th = TableHelper::from((override_table, override_span));
+            let variants: Option<Vec<String>> = th.optional("variants");
+            let sizes: Option<Vec<u16>> = th.optional("sizes");
+            if let Err(err) = th.finalize(None) {
+                diags.push_deser_error(err);
+                continue;
+            }
+
+            providers.insert(name, ProviderDeclaration::Override { variants, sizes, span: entry_span });
+            continue;
+        }
 
         let mut th = TableHelper::from((entry_table, entry_span));
         let variants: Option<Vec<String>> = th.optional("variants");
@@ -311,13 +348,98 @@ pub(crate) fn parse_providers(
 
         providers.insert(
             name,
-            ProviderSchema {
-                variants: variants.unwrap_or_default(),
-                sizes: sizes.unwrap_or_default(),
+            ProviderDeclaration::Full {
+                schema: ProviderSchema {
+                    variants: variants.unwrap_or_default(),
+                    sizes: sizes.unwrap_or_default(),
+                },
+                span: entry_span,
             },
         );
     }
     providers
+}
+
+/// The provider schemas guicons ships with, parsed from
+/// `builtin_providers.gui.toml` through this same module rather than
+/// hardcoded as Rust literals - so it's one less thing to keep in sync by
+/// hand, and a manifest author can see exactly what it looks like.
+fn builtin_providers() -> &'static HashMap<String, ProviderSchema> {
+    static BUILTIN: std::sync::OnceLock<HashMap<String, ProviderSchema>> = std::sync::OnceLock::new();
+    BUILTIN.get_or_init(|| {
+        const SOURCE: &str = include_str!("builtin_providers.gui.toml");
+        let root = toml_span::parse(SOURCE).expect("builtin_providers.gui.toml is valid TOML");
+        let mut errors = Vec::new();
+        let mut diags = Diagnostics {
+            file: Path::new("<builtin_providers.gui.toml>"),
+            errors: &mut errors,
+        };
+        let declarations = parse_providers(Some(root), &mut diags);
+        assert!(errors.is_empty(), "builtin_providers.gui.toml failed to parse: {errors:?}");
+
+        declarations
+            .into_iter()
+            .map(|(name, declaration)| match declaration {
+                ProviderDeclaration::Full { schema, .. } => (name, schema),
+                ProviderDeclaration::Override { .. } => {
+                    unreachable!("builtin_providers.gui.toml can't `.override` itself")
+                }
+            })
+            .collect()
+    })
+}
+
+/// Resolves one manifest's `[providers.*]` declarations against the builtin
+/// set: a bare `[providers.X]` redefining a builtin name is rejected (use
+/// `.override` instead, so it's clear which one was meant); `.override`
+/// fields replace the builtin's per-field, inheriting whatever it didn't
+/// specify; builtins the file didn't mention at all pass through unchanged.
+pub(crate) fn resolve_providers(
+    declarations: HashMap<String, ProviderDeclaration>,
+    diags: &mut Diagnostics,
+) -> HashMap<String, ProviderSchema> {
+    let builtin = builtin_providers();
+    let mut resolved = HashMap::new();
+
+    for (name, declaration) in declarations {
+        match declaration {
+            ProviderDeclaration::Full { schema, span } => {
+                if builtin.contains_key(&name) {
+                    diags.error(
+                        Some(span.into()),
+                        format!(
+                            "`providers.{name}` is a built-in provider; use `[providers.{name}.override]` to customize it instead of redefining it"
+                        ),
+                    );
+                    continue;
+                }
+                resolved.insert(name, schema);
+            }
+            ProviderDeclaration::Override { variants, sizes, span } => match builtin.get(&name) {
+                Some(base) => {
+                    resolved.insert(
+                        name,
+                        ProviderSchema {
+                            variants: variants.unwrap_or_else(|| base.variants.clone()),
+                            sizes: sizes.unwrap_or_else(|| base.sizes.clone()),
+                        },
+                    );
+                }
+                None => {
+                    diags.error(
+                        Some(span.into()),
+                        format!("`providers.{name}.override` used, but `{name}` isn't a built-in provider"),
+                    );
+                }
+            },
+        }
+    }
+
+    for (name, schema) in builtin {
+        resolved.entry(name.clone()).or_insert_with(|| schema.clone());
+    }
+
+    resolved
 }
 
 /// Reverses `default_iconify_id`: given a raw iconify id and a provider
@@ -701,15 +823,10 @@ mod tests {
                 file: Path::new("test.gui.toml"),
                 errors: &mut errors,
             };
-            parse_providers(providers_value, &mut diags)
+            let declarations = parse_providers(providers_value, &mut diags);
+            resolve_providers(declarations, &mut diags)
         };
         (providers, errors.into_iter().map(|e| e.message).collect())
-    }
-
-    fn sorted_providers(providers: &HashMap<String, ProviderSchema>) -> Vec<(&str, &ProviderSchema)> {
-        let mut list: Vec<_> = providers.iter().map(|(name, schema)| (name.as_str(), schema)).collect();
-        list.sort_by_key(|(name, _)| *name);
-        list
     }
 
     fn schema(variants: &[&str], sizes: &[u16]) -> ProviderSchema {
@@ -730,30 +847,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_multiple_provider_schemas() {
+    fn parses_a_custom_provider_schema() {
         let (providers, errors) = providers_for(
             r#"
-            [providers.fluent]
-            variants = ["regular", "filled"]
-            sizes = [16, 20, 24, 28, 32, 48]
-
-            [providers.phosphor]
-            variants = ["thin", "light", "bold", "fill", "duotone"]
+            [providers.acme]
+            variants = ["outline", "solid"]
+            sizes = [16, 24]
             "#,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(sorted_providers(&providers));
+        let acme = providers.get("acme").expect("acme provider");
+        assert_eq!(acme.variants, vec!["outline", "solid"]);
+        assert_eq!(acme.sizes, vec![16, 24]);
     }
 
     #[test]
     fn provider_without_variants_or_sizes_defaults_to_empty() {
         let (providers, errors) = providers_for(
             r#"
-            [providers.lucide]
+            [providers.acme]
             "#,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(sorted_providers(&providers));
+        let acme = providers.get("acme").expect("acme provider");
+        assert!(acme.variants.is_empty());
+        assert!(acme.sizes.is_empty());
     }
 
     #[test]
@@ -770,8 +888,73 @@ mod tests {
     fn provider_schema_rejects_wrong_field_type() {
         let (_, errors) = providers_for(
             r#"
-            [providers.fluent]
+            [providers.acme]
             sizes = "big"
+            "#,
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn builtin_providers_are_available_even_when_unmentioned() {
+        let (providers, errors) = providers_for("");
+        assert!(errors.is_empty(), "{errors:?}");
+        let fluent = providers.get("fluent").expect("builtin fluent provider");
+        assert_eq!(fluent.variants, vec!["regular", "filled"]);
+        assert_eq!(fluent.sizes, vec![16, 20, 24, 28, 32, 48]);
+        for name in ["ph", "material-symbols", "heroicons", "bi", "tabler"] {
+            assert!(providers.contains_key(name), "missing builtin `{name}`");
+        }
+    }
+
+    #[test]
+    fn redefining_a_builtin_provider_without_override_is_an_error() {
+        let (providers, errors) = providers_for(
+            r#"
+            [providers.fluent]
+            variants = ["custom"]
+            "#,
+        );
+        assert_eq!(
+            providers.get("fluent").expect("builtin fluent provider").variants,
+            vec!["regular", "filled"],
+            "rejected redefinition must not replace the builtin"
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn override_replaces_only_the_fields_it_specifies() {
+        let (providers, errors) = providers_for(
+            r#"
+            [providers.fluent.override]
+            variants = ["regular", "filled", "light"]
+            "#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        let fluent = providers.get("fluent").expect("fluent provider");
+        assert_eq!(fluent.variants, vec!["regular", "filled", "light"]);
+        assert_eq!(fluent.sizes, vec![16, 20, 24, 28, 32, 48]);
+    }
+
+    #[test]
+    fn override_on_a_non_builtin_name_is_an_error() {
+        let (_, errors) = providers_for(
+            r#"
+            [providers.acme.override]
+            variants = ["solid"]
+            "#,
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn mixing_own_fields_with_override_is_an_error() {
+        let (_, errors) = providers_for(
+            r#"
+            [providers.fluent]
+            variants = ["custom"]
+            override = { variants = ["light"] }
             "#,
         );
         insta::assert_debug_snapshot!(errors);

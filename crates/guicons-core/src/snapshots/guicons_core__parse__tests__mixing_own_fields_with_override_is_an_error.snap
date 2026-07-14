@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`providers.fluent` can't mix its own fields with `providers.fluent.override` - use one or the other",
+]

@@ -69,11 +69,12 @@ impl IconManifest {
     pub fn entry_for_family_variant(
         &self,
         family: &str,
+        size: Option<u16>,
         variant: Option<&str>,
     ) -> Option<&IconEntry> {
-        self.entries
-            .iter()
-            .find(|entry| entry.family == family && entry.variant.as_deref() == variant)
+        self.entries.iter().find(|entry| {
+            entry.family == family && entry.size == size && entry.variant.as_deref() == variant
+        })
     }
 
     pub fn provider(&self, name: &str) -> Option<&ProviderSchema> {

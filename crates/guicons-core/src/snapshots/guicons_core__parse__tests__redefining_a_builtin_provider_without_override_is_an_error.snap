@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`providers.fluent` is a built-in provider; use `[providers.fluent.override]` to customize it instead of redefining it",
+]

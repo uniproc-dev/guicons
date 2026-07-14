@@ -33,7 +33,7 @@ mod icons {
     include!(concat!(env!("OUT_DIR"), "/icons.rs"));
 }
 
-let key = icons::key_from_dynamic_family_variant("settings", Some("filled"));
+let key = icons::key_from_dynamic_family_variant("settings", None, Some("filled"));
 ```
 
 Use `guicons` normally at runtime, and add `guicons-build` as a

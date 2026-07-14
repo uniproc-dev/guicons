@@ -48,15 +48,19 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
         .map(|variant| format!("    pub const {}: IconVariant = IconVariant::new(\"{}\");", rust_const_name(variant), variant))
         .collect::<Vec<_>>()
         .join("\n");
+    // Keyed on (family, size, variant) together, not just (family, variant):
+    // a family can repeat the same variant at more than one size (see
+    // `generate_builders`), and matching on family+variant alone would
+    // produce unreachable, silently-wrong duplicate match arms for those.
     let family_variant_arms = icons
         .iter()
-        .filter(|icon| icon.variant.is_some())
         .map(|icon| {
-            let variant = icon.variant.as_ref().unwrap();
+            let size_pattern = rust_option_pattern(icon.size.map(|size| size.to_string()));
+            let variant_pattern =
+                rust_option_pattern(icon.variant.as_ref().map(|variant| format!("variants::{}", rust_const_name(variant))));
             format!(
-                "        (families::{}, Some(variants::{})) => Some(keys::{}),",
+                "        (families::{}, {size_pattern}, {variant_pattern}) => Some(keys::{}),",
                 rust_const_name(&icon.family),
-                rust_const_name(variant),
                 rust_const_name(&icon.key)
             )
         })
@@ -64,13 +68,12 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
         .join("\n");
     let dynamic_family_variant_arms = icons
         .iter()
-        .filter(|icon| icon.variant.is_some())
         .map(|icon| {
-            let variant = icon.variant.as_ref().unwrap();
+            let size_pattern = rust_option_pattern(icon.size.map(|size| size.to_string()));
+            let variant_pattern = rust_option_pattern(icon.variant.as_ref().map(|variant| format!("\"{variant}\"")));
             format!(
-                "        (\"{}\", Some(\"{}\")) => Some(keys::{}),",
+                "        (\"{}\", {size_pattern}, {variant_pattern}) => Some(keys::{}),",
                 icon.family,
-                variant,
                 rust_const_name(&icon.key)
             )
         })
@@ -145,15 +148,15 @@ pub fn key_from_name(name: &str) -> Option<IconKey> {{
     }}
 }}
 
-pub fn key_from_family_variant(family: IconFamily, variant: Option<IconVariant>) -> Option<IconKey> {{
-    match (family, variant) {{
+pub fn key_from_family_variant(family: IconFamily, size: Option<u16>, variant: Option<IconVariant>) -> Option<IconKey> {{
+    match (family, size, variant) {{
 {family_variant_arms}
         _ => None,
     }}
 }}
 
-pub fn key_from_dynamic_family_variant(family: &str, variant: Option<&str>) -> Option<IconKey> {{
-    match (family, variant) {{
+pub fn key_from_dynamic_family_variant(family: &str, size: Option<u16>, variant: Option<&str>) -> Option<IconKey> {{
+    match (family, size, variant) {{
 {dynamic_family_variant_arms}
         _ => None,
     }}
@@ -163,8 +166,8 @@ pub fn key_from_ref(icon: IconRef<'_>) -> Option<IconKey> {{
     match icon {{
         IconRef::Key(key) => Some(key),
         IconRef::Name(name) => key_from_name(name),
-        IconRef::FamilyVariant {{ family, variant }} => key_from_family_variant(family, variant),
-        IconRef::DynamicFamilyVariant {{ family, variant }} => key_from_dynamic_family_variant(family, variant),
+        IconRef::FamilyVariant {{ family, size, variant }} => key_from_family_variant(family, size, variant),
+        IconRef::DynamicFamilyVariant {{ family, size, variant }} => key_from_dynamic_family_variant(family, size, variant),
     }}
 }}
 
@@ -368,6 +371,13 @@ fn rust_variant_name(key: &str) -> String {
         format!("Icon{result}")
     } else {
         result
+    }
+}
+
+fn rust_option_pattern(inner: Option<String>) -> String {
+    match inner {
+        Some(inner) => format!("Some({inner})"),
+        None => "None".to_string(),
     }
 }
 

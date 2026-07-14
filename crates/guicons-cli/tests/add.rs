@@ -70,7 +70,7 @@ fn add_iconify_without_flags_decomposes_using_provider_schema() {
     let manifest_path = write(
         dir.path(),
         "icons.gui.toml",
-        "[providers.fluent]\nvariants = [\"regular\", \"filled\"]\nsizes = [24]\n",
+        "[providers.fluent.override]\nvariants = [\"regular\", \"filled\"]\nsizes = [24]\n",
     );
 
     let keys = guicons_cli::add(&manifest_path, "fluent:settings-24-regular", None, &[], None, false).unwrap();

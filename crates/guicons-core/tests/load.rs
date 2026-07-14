@@ -110,6 +110,68 @@ fn include_merges_child_manifest_entries() {
 }
 
 #[test]
+fn include_merges_child_manifest_providers() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "icons/nav.gui.toml",
+        r#"
+        [providers.acme-nav]
+        variants = ["thin", "light", "bold", "fill", "duotone"]
+
+        [back]
+        file = "back.svg"
+        "#,
+    );
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [providers.acme-root]
+        variants = ["regular", "filled"]
+        sizes = [24]
+
+        [include]
+        nav = "icons/nav.gui.toml"
+        "#,
+    );
+
+    let (manifest, errors) = load_icon_manifest(&root);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(manifest.provider("acme-root").is_some());
+    assert!(manifest.provider("acme-nav").is_some());
+    assert_eq!(manifest.provider("acme-nav").unwrap().variants, vec!["thin", "light", "bold", "fill", "duotone"]);
+}
+
+#[test]
+fn a_files_own_provider_wins_over_an_included_ones_same_name() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "icons/nav.gui.toml",
+        r#"
+        [providers.acme]
+        variants = ["from-include"]
+        "#,
+    );
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [providers.acme]
+        variants = ["from-root"]
+
+        [include]
+        nav = "icons/nav.gui.toml"
+        "#,
+    );
+
+    let (manifest, errors) = load_icon_manifest(&root);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(manifest.provider("acme").unwrap().variants, vec!["from-root"]);
+}
+
+#[test]
 fn cyclic_include_is_reported_and_does_not_hang() {
     let dir = tempdir().unwrap();
     write(

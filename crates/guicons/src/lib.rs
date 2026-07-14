@@ -39,10 +39,12 @@ pub enum IconRef<'a> {
     Name(&'a str),
     FamilyVariant {
         family: IconFamily,
+        size: Option<u16>,
         variant: Option<IconVariant>,
     },
     DynamicFamilyVariant {
         family: &'a str,
+        size: Option<u16>,
         variant: Option<&'a str>,
     },
 }
@@ -112,12 +114,12 @@ impl IconVariant {
 }
 
 impl<'a> IconRef<'a> {
-    pub const fn family_variant(family: IconFamily, variant: Option<IconVariant>) -> Self {
-        Self::FamilyVariant { family, variant }
+    pub const fn family_variant(family: IconFamily, size: Option<u16>, variant: Option<IconVariant>) -> Self {
+        Self::FamilyVariant { family, size, variant }
     }
 
-    pub const fn dynamic_family_variant(family: &'a str, variant: Option<&'a str>) -> Self {
-        Self::DynamicFamilyVariant { family, variant }
+    pub const fn dynamic_family_variant(family: &'a str, size: Option<u16>, variant: Option<&'a str>) -> Self {
+        Self::DynamicFamilyVariant { family, size, variant }
     }
 }
 
