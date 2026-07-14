@@ -1,0 +1,36 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: sorted_providers(&providers)
+---
+[
+    (
+        "fluent",
+        ProviderSchema {
+            variants: [
+                "regular",
+                "filled",
+            ],
+            sizes: [
+                16,
+                20,
+                24,
+                28,
+                32,
+                48,
+            ],
+        },
+    ),
+    (
+        "phosphor",
+        ProviderSchema {
+            variants: [
+                "thin",
+                "light",
+                "bold",
+                "fill",
+                "duotone",
+            ],
+            sizes: [],
+        },
+    ),
+]

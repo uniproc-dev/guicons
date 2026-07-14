@@ -1,0 +1,15 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: "decompose_iconify_id(\"fluent:add-square-multiple-24-regular\", &manifest)"
+---
+Some(
+    (
+        "add-square-multiple",
+        Some(
+            24,
+        ),
+        Some(
+            "regular",
+        ),
+    ),
+)

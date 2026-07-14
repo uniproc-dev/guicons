@@ -1,0 +1,20 @@
+[package]
+name = "guicons-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for editing icons.gui.toml and populating the icon cache"
+
+[[bin]]
+name = "icons"
+path = "src/main.rs"
+
+[dependencies]
+guicons-core = { path = "../guicons-core" }
+guicons-net = { path = "../guicons-net" }
+toml_edit = "0.25"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3.27.0"
+
+[dev-dependencies]
+tiny_http = "0.12.0"

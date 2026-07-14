@@ -7,7 +7,7 @@
 
 use crate::diagnostics::{Diagnostics, ManifestError};
 use crate::model::{IconEntry, IconManifest};
-use crate::parse::{check_reserved_top_level, collect_entries, parse_defaults};
+use crate::parse::{collect_entries, parse_defaults, parse_providers};
 use crate::paths::{canonicalize_or_self, find_workspace_root, resolve_entry_path};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -57,6 +57,7 @@ fn empty_manifest(manifest_path: &Path) -> IconManifest {
             .to_path_buf(),
         source_paths: vec![manifest_path.to_path_buf()],
         entries: Vec::new(),
+        providers: std::collections::HashMap::new(),
     }
 }
 
@@ -125,14 +126,6 @@ fn load_icon_manifest_inner(
         .to_path_buf();
     let workspace_root = find_workspace_root(&manifest_path).unwrap_or_else(|| manifest_dir.clone());
 
-    {
-        let mut diags = Diagnostics {
-            file: &manifest_path,
-            errors,
-        };
-        check_reserved_top_level(&root_table, &mut diags);
-    }
-
     let defaults_value = root_table.remove("defaults");
     let defaults = {
         let mut diags = Diagnostics {
@@ -140,6 +133,15 @@ fn load_icon_manifest_inner(
             errors,
         };
         parse_defaults(defaults_value, &workspace_root, &manifest_dir, &mut diags)
+    };
+
+    let providers_value = root_table.remove("providers");
+    let providers = {
+        let mut diags = Diagnostics {
+            file: &manifest_path,
+            errors,
+        };
+        parse_providers(providers_value, &mut diags)
     };
 
     let mut entries = Vec::new();
@@ -168,6 +170,7 @@ fn load_icon_manifest_inner(
         workspace_root,
         source_paths: source_paths.clone(),
         entries,
+        providers,
     }
 }
 

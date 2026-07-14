@@ -1,0 +1,13 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: sorted_providers(&providers)
+---
+[
+    (
+        "lucide",
+        ProviderSchema {
+            variants: [],
+            sizes: [],
+        },
+    ),
+]

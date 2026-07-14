@@ -1,0 +1,11 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: "decompose_iconify_id(\"ph:acorn\", &manifest)"
+---
+Some(
+    (
+        "acorn",
+        None,
+        None,
+    ),
+)

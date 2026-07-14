@@ -1,0 +1,13 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: "decompose_iconify_id(\"material-symbols:3d-rotation-outline-rounded\",\n&manifest)"
+---
+Some(
+    (
+        "3d-rotation",
+        None,
+        Some(
+            "outline-rounded",
+        ),
+    ),
+)

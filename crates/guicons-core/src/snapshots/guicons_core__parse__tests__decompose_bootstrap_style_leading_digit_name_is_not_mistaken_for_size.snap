@@ -1,0 +1,11 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: "decompose_iconify_id(\"bi:0-circle\", &manifest)"
+---
+Some(
+    (
+        "0-circle",
+        None,
+        None,
+    ),
+)

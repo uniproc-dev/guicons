@@ -5,8 +5,9 @@
 //! `toml_span::parse` and validates/extracts entries from it.
 
 use crate::diagnostics::Diagnostics;
-use crate::model::{IconEntry, IconEntrySource, ManifestDefaults};
+use crate::model::{IconEntry, IconEntrySource, IconManifest, ManifestDefaults, ProviderSchema};
 use crate::paths::resolve_workspace_path;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use toml_span::de_helpers::TableHelper;
 use toml_span::value::{Table, Value, ValueInner};
@@ -22,14 +23,6 @@ const ENTRY_KEYS: &[&str] = &[
     "root",
 ];
 pub(crate) const RESERVED_TOP_LEVEL: &[&str] = &["defaults", "include", "providers"];
-
-pub(crate) fn check_reserved_top_level(table: &Table<'_>, diags: &mut Diagnostics) {
-    if let Some(value) = table.get("providers") {
-        if value.as_table().is_none() {
-            diags.error(Some(value.span.into()), "`[providers]` must be a table");
-        }
-    }
-}
 
 fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     match value.take() {
@@ -281,6 +274,100 @@ pub(crate) fn parse_defaults(
         provider,
         size,
     }
+}
+
+pub(crate) fn parse_providers(
+    providers_value: Option<Value<'_>>,
+    diags: &mut Diagnostics,
+) -> HashMap<String, ProviderSchema> {
+    let Some(mut providers_value) = providers_value else {
+        return HashMap::new();
+    };
+    let span = providers_value.span;
+    let Some(table) = take_table(&mut providers_value) else {
+        diags.error(Some(span.into()), "`[providers]` must be a table");
+        return HashMap::new();
+    };
+
+    let mut providers = HashMap::new();
+    for (name_key, mut value) in table {
+        let name = name_key.name.to_string();
+        let entry_span = value.span;
+        let Some(entry_table) = take_table(&mut value) else {
+            diags.error(
+                Some(entry_span.into()),
+                format!("`providers.{name}` must be a table"),
+            );
+            continue;
+        };
+
+        let mut th = TableHelper::from((entry_table, entry_span));
+        let variants: Option<Vec<String>> = th.optional("variants");
+        let sizes: Option<Vec<u16>> = th.optional("sizes");
+        if let Err(err) = th.finalize(None) {
+            diags.push_deser_error(err);
+            continue;
+        }
+
+        providers.insert(
+            name,
+            ProviderSchema {
+                variants: variants.unwrap_or_default(),
+                sizes: sizes.unwrap_or_default(),
+            },
+        );
+    }
+    providers
+}
+
+/// Reverses `default_iconify_id`: given a raw iconify id and a provider
+/// schema declared in the manifest, splits it back into `family`, `size`,
+/// and `variant`. Returns `None` if the provider has no `[providers.X]`
+/// entry - callers decide what to fall back to (e.g. ask for `--name`).
+///
+/// Icon set naming conventions vary too much to assume fixed positions:
+/// Fluent always has both `-size-variant`, Phosphor has no size and its
+/// bare name is unsuffixed, Material Symbols stacks multiple suffix tokens.
+/// So suffixes are matched by membership in `schema.variants`/`schema.sizes`,
+/// not by position, and the variant suffix match is greedy-longest so a
+/// multi-segment variant like `outline-rounded` isn't torn apart.
+pub fn decompose_iconify_id(
+    id: &str,
+    manifest: &IconManifest,
+) -> Option<(String, Option<u16>, Option<String>)> {
+    let (provider, name) = id.split_once(':')?;
+    let schema = manifest.provider(provider)?;
+
+    let segments: Vec<&str> = name.split('-').collect();
+
+    let mut variant: Option<String> = None;
+    let mut remaining = segments.len();
+    for suffix_len in (1..=segments.len()).rev() {
+        let candidate = segments[segments.len() - suffix_len..].join("-");
+        if schema.variants.iter().any(|known| *known == candidate) {
+            variant = Some(candidate);
+            remaining = segments.len() - suffix_len;
+            break;
+        }
+    }
+
+    let mut family_segments = segments[..remaining].to_vec();
+
+    let mut size: Option<u16> = None;
+    if let Some(last) = family_segments.last() {
+        if let Ok(parsed) = last.parse::<u16>() {
+            if schema.sizes.contains(&parsed) {
+                size = Some(parsed);
+                family_segments.pop();
+            }
+        }
+    }
+
+    if family_segments.is_empty() {
+        return None;
+    }
+
+    Some((family_segments.join("-"), size, variant))
 }
 
 fn default_iconify_id(
@@ -602,5 +689,215 @@ mod tests {
             "#,
         );
         insta::assert_debug_snapshot!(errors);
+    }
+
+    fn providers_for(toml: &str) -> (HashMap<String, ProviderSchema>, Vec<String>) {
+        let mut root = toml_span::parse(toml).expect("valid toml");
+        let mut table = take_table(&mut root).expect("root must be a table");
+        let providers_value = table.remove("providers");
+        let mut errors = Vec::new();
+        let providers = {
+            let mut diags = Diagnostics {
+                file: Path::new("test.gui.toml"),
+                errors: &mut errors,
+            };
+            parse_providers(providers_value, &mut diags)
+        };
+        (providers, errors.into_iter().map(|e| e.message).collect())
+    }
+
+    fn sorted_providers(providers: &HashMap<String, ProviderSchema>) -> Vec<(&str, &ProviderSchema)> {
+        let mut list: Vec<_> = providers.iter().map(|(name, schema)| (name.as_str(), schema)).collect();
+        list.sort_by_key(|(name, _)| *name);
+        list
+    }
+
+    fn schema(variants: &[&str], sizes: &[u16]) -> ProviderSchema {
+        ProviderSchema {
+            variants: variants.iter().map(|v| v.to_string()).collect(),
+            sizes: sizes.to_vec(),
+        }
+    }
+
+    fn manifest_with_providers(providers: HashMap<String, ProviderSchema>) -> IconManifest {
+        IconManifest {
+            manifest_path: PathBuf::from("icons.gui.toml"),
+            workspace_root: PathBuf::from("/workspace"),
+            source_paths: Vec::new(),
+            entries: Vec::new(),
+            providers,
+        }
+    }
+
+    #[test]
+    fn parses_multiple_provider_schemas() {
+        let (providers, errors) = providers_for(
+            r#"
+            [providers.fluent]
+            variants = ["regular", "filled"]
+            sizes = [16, 20, 24, 28, 32, 48]
+
+            [providers.phosphor]
+            variants = ["thin", "light", "bold", "fill", "duotone"]
+            "#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        insta::assert_debug_snapshot!(sorted_providers(&providers));
+    }
+
+    #[test]
+    fn provider_without_variants_or_sizes_defaults_to_empty() {
+        let (providers, errors) = providers_for(
+            r#"
+            [providers.lucide]
+            "#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        insta::assert_debug_snapshot!(sorted_providers(&providers));
+    }
+
+    #[test]
+    fn providers_entry_must_be_a_table() {
+        let (_, errors) = providers_for(
+            r#"
+            providers = "nope"
+            "#,
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn provider_schema_rejects_wrong_field_type() {
+        let (_, errors) = providers_for(
+            r#"
+            [providers.fluent]
+            sizes = "big"
+            "#,
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn decompose_fluent_style_size_and_variant() {
+        let mut providers = HashMap::new();
+        providers.insert("fluent".to_string(), schema(&["regular", "filled"], &[16, 20, 24, 28, 32, 48]));
+        let manifest = manifest_with_providers(providers);
+        insta::assert_debug_snapshot!(decompose_iconify_id(
+            "fluent:add-square-multiple-24-regular",
+            &manifest
+        ));
+    }
+
+    #[test]
+    fn decompose_phosphor_style_bare_default_has_no_suffix() {
+        let mut providers = HashMap::new();
+        providers.insert("ph".to_string(), schema(&["thin", "light", "bold", "fill", "duotone"], &[]));
+        let manifest = manifest_with_providers(providers);
+        insta::assert_debug_snapshot!(decompose_iconify_id("ph:acorn", &manifest));
+    }
+
+    #[test]
+    fn decompose_phosphor_style_with_variant_suffix() {
+        let mut providers = HashMap::new();
+        providers.insert("ph".to_string(), schema(&["thin", "light", "bold", "fill", "duotone"], &[]));
+        let manifest = manifest_with_providers(providers);
+        insta::assert_debug_snapshot!(decompose_iconify_id("ph:acorn-bold", &manifest));
+    }
+
+    #[test]
+    fn decompose_material_symbols_style_compound_variant_matches_greedily() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "material-symbols".to_string(),
+            schema(&["outline", "rounded", "sharp", "outline-rounded", "outline-sharp"], &[]),
+        );
+        let manifest = manifest_with_providers(providers);
+        insta::assert_debug_snapshot!(decompose_iconify_id(
+            "material-symbols:3d-rotation-outline-rounded",
+            &manifest
+        ));
+    }
+
+    #[test]
+    fn decompose_bootstrap_style_leading_digit_name_is_not_mistaken_for_size() {
+        let mut providers = HashMap::new();
+        providers.insert("bi".to_string(), schema(&["fill"], &[]));
+        let manifest = manifest_with_providers(providers);
+        insta::assert_debug_snapshot!(decompose_iconify_id("bi:0-circle", &manifest));
+    }
+
+    #[test]
+    fn decompose_unknown_provider_returns_none() {
+        let manifest = manifest_with_providers(HashMap::new());
+        assert_eq!(decompose_iconify_id("unknown:whatever", &manifest), None);
+    }
+
+    #[test]
+    fn decompose_id_without_colon_returns_none() {
+        let manifest = manifest_with_providers(HashMap::new());
+        assert_eq!(decompose_iconify_id("no-colon-here", &manifest), None);
+    }
+
+    mod decompose_proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn schema_strategy() -> impl Strategy<Value = ProviderSchema> {
+            (
+                prop::collection::vec("[a-z]{2,6}", 0..4),
+                prop::collection::vec(1u16..100, 0..4),
+            )
+                .prop_map(|(variants, sizes)| ProviderSchema { variants, sizes })
+        }
+
+        proptest! {
+            /// Building an id the same way `default_iconify_id` does, then
+            /// decomposing it with the same schema, must recover the
+            /// original family/size/variant - as long as the family itself
+            /// doesn't happen to look like one of the schema's own suffixes
+            /// (an inherent, expected ambiguity of suffix-stripping, not
+            /// something to paper over here).
+            #[test]
+            fn round_trips_through_build_and_decompose(
+                family_segments in prop::collection::vec("[a-z]{2,8}", 1..3),
+                schema in schema_strategy(),
+                use_variant in any::<bool>(),
+                use_size in any::<bool>(),
+            ) {
+                prop_assume!(family_segments.iter().all(|segment| !schema.variants.contains(segment)));
+
+                let family = family_segments.join("-");
+                let variant = if use_variant { schema.variants.first().cloned() } else { None };
+                let size = if use_size { schema.sizes.first().copied() } else { None };
+
+                let mut name = family.clone();
+                if let Some(size) = size {
+                    name.push('-');
+                    name.push_str(&size.to_string());
+                }
+                if let Some(variant) = &variant {
+                    name.push('-');
+                    name.push_str(variant);
+                }
+                let id = format!("provider:{name}");
+
+                let mut providers = HashMap::new();
+                providers.insert("provider".to_string(), schema);
+                let manifest = manifest_with_providers(providers);
+
+                prop_assert_eq!(decompose_iconify_id(&id, &manifest), Some((family, size, variant)));
+            }
+
+            /// No input string, however malformed, should panic - the point
+            /// of a suffix-membership-based parser is that "no match" is
+            /// just `None`/unchanged, never a crash.
+            #[test]
+            fn never_panics_on_arbitrary_input(id in ".*", schema in schema_strategy()) {
+                let mut providers = HashMap::new();
+                providers.insert("provider".to_string(), schema);
+                let manifest = manifest_with_providers(providers);
+                let _ = decompose_iconify_id(&id, &manifest);
+            }
+        }
     }
 }

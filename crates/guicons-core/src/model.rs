@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -6,6 +7,16 @@ pub struct IconManifest {
     pub(crate) workspace_root: PathBuf,
     pub(crate) source_paths: Vec<PathBuf>,
     pub(crate) entries: Vec<IconEntry>,
+    pub(crate) providers: HashMap<String, ProviderSchema>,
+}
+
+/// The known variants/sizes for one icon provider, from `[providers.<name>]`.
+/// Lets `decompose_iconify_id` tell which trailing `-segment`s of a pasted
+/// iconify id are suffixes versus part of the icon's own name.
+#[derive(Clone, Debug, Default)]
+pub struct ProviderSchema {
+    pub variants: Vec<String>,
+    pub sizes: Vec<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -63,6 +74,10 @@ impl IconManifest {
         self.entries
             .iter()
             .find(|entry| entry.family == family && entry.variant.as_deref() == variant)
+    }
+
+    pub fn provider(&self, name: &str) -> Option<&ProviderSchema> {
+        self.providers.get(name)
     }
 }
 
