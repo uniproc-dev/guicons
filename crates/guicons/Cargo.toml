@@ -1,0 +1,24 @@
+[package]
+name = "guicons"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Manifest-driven icon system for native Rust GUI applications"
+
+[features]
+default = ["macros"]
+build = ["dep:pathdiff", "dep:sha2", "dep:toml", "dep:ureq"]
+macros = ["dep:guicons-macros"]
+slint = ["dep:slint"]
+
+[dependencies]
+guicons-core = { path = "../guicons-core" }
+guicons-macros = { path = "../guicons-macros", optional = true }
+pathdiff = { version = "0.2.3", optional = true }
+sha2 = { version = "0.10.9", optional = true }
+slint = { version = "1.15.1", optional = true }
+toml = { version = "0.9.8", optional = true }
+ureq = { version = "2.12.1", optional = true }
+
+[dev-dependencies]
+tempfile = "3.23.0"

@@ -1,0 +1,12 @@
+[package]
+name = "guicons-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core manifest model and parser for guicons"
+
+[dependencies]
+toml-span = "0.7"
+
+[dev-dependencies]
+tempfile = "3.27.0"

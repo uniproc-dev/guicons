@@ -1,0 +1,16 @@
+[package]
+name = "guicons-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Proc macros for guicons"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+guicons-core = { path = "../guicons-core" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["parsing", "proc-macro"] }
+winnow = "0.7.13"

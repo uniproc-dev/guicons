@@ -1,0 +1,9 @@
+[defaults]
+root = "assets"
+
+[settings]
+variants.filled = { file = "settings-filled.svg" }
+variants.regular = { file = "settings-regular.svg" }
+
+[docker]
+file = "docker.svg"

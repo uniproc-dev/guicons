@@ -1,0 +1,3 @@
+/target/
+crates/guicons/tests/fixtures/*/Cargo.lock
+crates/guicons/tests/fixtures/*/target/
