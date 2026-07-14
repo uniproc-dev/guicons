@@ -2,7 +2,8 @@ use super::load_icon_manifest;
 use super::materialize::{
     materialize_icons, ImageKind, MaterializedIcon, MaterializedIconBackend,
 };
-use guicons_core::rust_const_name;
+use guicons_core::{rust_const_name, rust_fn_name};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -112,6 +113,8 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let builders = generate_builders(icons);
+
     let generated = format!(
         r#"// AUTO-GENERATED from {}
 use guicons::{{IconData, IconFamily, IconKey, IconRef, IconVariant}};
@@ -134,6 +137,7 @@ pub mod variants {{
 {variant_consts}
 }}
 
+{builders}
 pub const ALL_KEYS: &[IconKey] = &[{all_keys}];
 
 pub fn name_for_key(key: IconKey) -> Option<&'static str> {{
@@ -184,10 +188,117 @@ pub fn resolve<'a>(icon: impl Into<IconRef<'a>>) -> Option<IconData> {{
     key_from_ref(icon.into()).and_then(data_for)
 }}
 "#,
-        manifest_path.display()
+        manifest_file_name(manifest_path)
     );
 
     write_if_changed(out_file, &generated);
+}
+
+/// Generates one typed builder per family, so callers pick an icon through
+/// `settings().filled()` instead of by string.
+///
+/// Families group by `icon.family`. Within a family, icons without an
+/// explicit size (`icon.size == None`) become plain methods (or, if there's
+/// exactly one and it has no variant either, a bare `fn` returning `IconKey`
+/// directly - no builder needed). Icons with an explicit size (`[family.N]`
+/// in the manifest) each get their own `size_N()` step, only exposing the
+/// variants that actually exist at that size - never the full cartesian
+/// product of every variant/size the manifest happens to mention elsewhere.
+fn generate_builders(icons: &[MaterializedIcon]) -> String {
+    let mut families: BTreeMap<&str, Vec<&MaterializedIcon>> = BTreeMap::new();
+    for icon in icons {
+        families.entry(icon.family.as_str()).or_default().push(icon);
+    }
+
+    families
+        .into_iter()
+        .map(|(family, members)| generate_family_builder(family, &members))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn generate_family_builder(family: &str, members: &[&MaterializedIcon]) -> String {
+    let mut unsized_icons: Vec<&MaterializedIcon> = Vec::new();
+    let mut sized: BTreeMap<u16, Vec<&MaterializedIcon>> = BTreeMap::new();
+    for icon in members {
+        match icon.size {
+            Some(size) => sized.entry(size).or_default().push(*icon),
+            None => unsized_icons.push(icon),
+        }
+    }
+
+    let fn_name = rust_fn_name(family);
+    let type_name = rust_variant_name(family);
+
+    // No family in the manifest actually varies by size - the common case.
+    // Keep the plain `fn`/2-tier-builder shape, no `size_N()` step at all.
+    if sized.is_empty() {
+        return generate_leaf(&fn_name, &format!("{type_name}Builder"), &unsized_icons);
+    }
+
+    let builder_type = format!("{type_name}Builder");
+    let mut methods = generate_group_methods(&unsized_icons);
+    let mut nested_types = String::new();
+
+    for (size, group) in &sized {
+        if group.len() == 1 && group[0].variant.is_none() {
+            methods.push_str(&format!(
+                "    pub const fn size_{size}(self) -> IconKey {{\n        keys::{}\n    }}\n",
+                rust_const_name(&group[0].key)
+            ));
+            continue;
+        }
+
+        let size_type = format!("{type_name}{size}VariantBuilder");
+        let variant_methods = generate_group_methods(group);
+        nested_types.push_str(&format!(
+            "pub struct {size_type};\n\nimpl {size_type} {{\n{variant_methods}}}\n\n"
+        ));
+        methods.push_str(&format!(
+            "    pub const fn size_{size}(self) -> {size_type} {{\n        {size_type}\n    }}\n"
+        ));
+    }
+
+    format!(
+        "{nested_types}pub struct {builder_type};\n\npub const fn {fn_name}() -> {builder_type} {{\n    {builder_type}\n}}\n\nimpl {builder_type} {{\n{methods}}}\n"
+    )
+}
+
+/// Emits either a bare `fn` (single icon, no variant - the common
+/// no-variant-no-size case) or a marker struct + one method per variant.
+fn generate_leaf(fn_name: &str, builder_type: &str, icons: &[&MaterializedIcon]) -> String {
+    if let [icon] = icons {
+        if icon.variant.is_none() {
+            return format!(
+                "pub const fn {fn_name}() -> IconKey {{\n    keys::{}\n}}\n",
+                rust_const_name(&icon.key)
+            );
+        }
+    }
+
+    let methods = generate_group_methods(icons);
+    format!(
+        "pub struct {builder_type};\n\npub const fn {fn_name}() -> {builder_type} {{\n    {builder_type}\n}}\n\nimpl {builder_type} {{\n{methods}}}\n"
+    )
+}
+
+/// One method per icon in `icons`. Named after the icon's variant, or
+/// `default` for the rare icon that has no variant but still had to share a
+/// builder with sized siblings (see `generate_family_builder`).
+fn generate_group_methods(icons: &[&MaterializedIcon]) -> String {
+    icons
+        .iter()
+        .map(|icon| {
+            let method_name = match icon.variant.as_deref() {
+                Some(variant) => rust_fn_name(variant),
+                None => "default".to_string(),
+            };
+            format!(
+                "    pub const fn {method_name}(self) -> IconKey {{\n        keys::{}\n    }}\n",
+                rust_const_name(&icon.key)
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn generate_slint_icon_global_from_materialized(
@@ -239,6 +350,16 @@ pub(crate) fn generate_slint_icon_global_from_materialized(
         "// AUTO-GENERATED - do not edit manually\n{components}\nexport component Icon inherits Rectangle {{\n    in property <string> name;\n    in property <color> colorize: transparent;\n\n{cases}\n}}\n"
     );
     write_if_changed(out_file, &generated);
+}
+
+/// Just the file name, not the full (often username-bearing) absolute path -
+/// this only ends up in a source comment, so leaking `C:\Users\<name>\...`
+/// into a committed/shared generated file isn't worth the extra context.
+fn manifest_file_name(manifest_path: &Path) -> String {
+    manifest_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| manifest_path.display().to_string())
 }
 
 fn write_if_changed(path: &Path, content: &str) {
@@ -308,4 +429,77 @@ fn relative_or_absolute_icon_path(base_file: &Path, target: &Path) -> String {
         }
     }
     target.to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn icon(key: &str, family: &str, variant: Option<&str>, size: Option<u16>) -> MaterializedIcon {
+        MaterializedIcon {
+            key: key.to_string(),
+            family: family.to_string(),
+            variant: variant.map(str::to_string),
+            size,
+            dynamic: false,
+            backend: MaterializedIconBackend::Image {
+                path: Path::new("unused.svg").to_path_buf(),
+                kind: ImageKind::Svg,
+            },
+        }
+    }
+
+    #[test]
+    fn family_without_variant_or_size_is_a_bare_fn() {
+        let icons = vec![icon("docker", "docker", None, None)];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
+
+    #[test]
+    fn family_with_variants_only_is_a_two_tier_builder() {
+        let icons = vec![
+            icon("settings-filled", "settings", Some("filled"), None),
+            icon("settings-regular", "settings", Some("regular"), None),
+        ];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
+
+    #[test]
+    fn family_with_a_shared_variant_set_across_sizes() {
+        let icons = vec![
+            icon("settings-20-filled", "settings", Some("filled"), Some(20)),
+            icon("settings-20-regular", "settings", Some("regular"), Some(20)),
+            icon("settings-24-filled", "settings", Some("filled"), Some(24)),
+            icon("settings-24-regular", "settings", Some("regular"), Some(24)),
+        ];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
+
+    #[test]
+    fn family_with_a_different_variant_set_per_size_gets_distinct_types() {
+        let icons = vec![
+            icon("settings-16-filled", "settings", Some("filled"), Some(16)),
+            icon("settings-24-filled", "settings", Some("filled"), Some(24)),
+            icon("settings-24-regular", "settings", Some("regular"), Some(24)),
+        ];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
+
+    #[test]
+    fn family_with_a_single_icon_per_size_skips_the_variant_builder() {
+        let icons = vec![
+            icon("logo-16", "logo", None, Some(16)),
+            icon("logo-32", "logo", None, Some(32)),
+        ];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
+
+    #[test]
+    fn sizeless_icon_sharing_a_family_with_sized_ones_gets_a_default_method() {
+        let icons = vec![
+            icon("settings", "settings", None, None),
+            icon("settings-24-filled", "settings", Some("filled"), Some(24)),
+        ];
+        insta::assert_snapshot!(generate_builders(&icons));
+    }
 }

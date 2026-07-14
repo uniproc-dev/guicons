@@ -45,6 +45,20 @@ fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     }
 }
 
+/// A trailing numeric path segment (e.g. `[settings.20]`) is a size, not part
+/// of the family name - `settings.20.variants.filled` should produce family
+/// `settings` with size `20`, not family `settings-20`. This mirrors how
+/// `variants.*` is a dedicated axis, without needing a dedicated manifest
+/// keyword for it: any nested group whose name is just a number is size.
+fn split_family_and_size(path: &[String]) -> (String, Option<u16>) {
+    if let Some((last, rest)) = path.split_last() {
+        if let Ok(size) = last.parse::<u16>() {
+            return (rest.join("-"), Some(size));
+        }
+    }
+    (path.join("-"), None)
+}
+
 pub(crate) fn collect_entries(
     path: Vec<String>,
     table: Table<'_>,
@@ -55,12 +69,13 @@ pub(crate) fn collect_entries(
 ) {
     let mut table = table;
     if let Some(mut variants_value) = table.remove("variants") {
-        let family = path.join("-");
+        let key_prefix = path.join("-");
+        let (family, explicit_size) = split_family_and_size(&path);
         let variants_span = variants_value.span;
         let Some(variants_table) = take_table(&mut variants_value) else {
             diags.error(
                 Some(variants_span.into()),
-                format!("`variants` in `{family}` must be a table"),
+                format!("`variants` in `{key_prefix}` must be a table"),
             );
             return;
         };
@@ -71,13 +86,14 @@ pub(crate) fn collect_entries(
             match take_table(&mut variant_value) {
                 Some(variant_table) => {
                     if let Some(entry) = parse_entry(
-                        format!("{family}-{variant}"),
+                        format!("{key_prefix}-{variant}"),
                         family.clone(),
                         Some(variant),
                         variant_table,
                         entry_span,
                         workspace_root,
                         defaults,
+                        explicit_size,
                         diags,
                     ) {
                         acc.push(entry);
@@ -85,7 +101,7 @@ pub(crate) fn collect_entries(
                 }
                 None => diags.error(
                     Some(entry_span.into()),
-                    format!("variant `{family}.{variant}` must be an inline table"),
+                    format!("variant `{key_prefix}.{variant}` must be an inline table"),
                 ),
             }
         }
@@ -97,15 +113,17 @@ pub(crate) fn collect_entries(
         .any(|key| ENTRY_KEYS.contains(&key.name.as_ref()));
     if is_entry {
         let key = path.join("-");
+        let (family, explicit_size) = split_family_and_size(&path);
         let table_span = table_span(&table);
         if let Some(entry) = parse_entry(
-            key.clone(),
             key,
+            family,
             None,
             table,
             table_span,
             workspace_root,
             defaults,
+            explicit_size,
             diags,
         ) {
             acc.push(entry);
@@ -147,6 +165,7 @@ fn parse_entry(
     table_span: Span,
     workspace_root: &Path,
     defaults: &ManifestDefaults,
+    explicit_size: Option<u16>,
     diags: &mut Diagnostics,
 ) -> Option<IconEntry> {
     let mut th = TableHelper::from((table, table_span));
@@ -173,10 +192,12 @@ fn parse_entry(
         .map(|value| vec![resolve_workspace_path(workspace_root, &value)])
         .unwrap_or_else(|| defaults.roots.clone());
 
+    let resolved_size = explicit_size.or(defaults.size);
+
     let default_iconify = if has_iconify {
         None
     } else {
-        default_iconify_id(&family, variant.as_deref(), defaults)
+        default_iconify_id(&family, variant.as_deref(), resolved_size, defaults)
     };
     let iconify = iconify.or_else(|| default_iconify.clone());
 
@@ -218,7 +239,7 @@ fn parse_entry(
         key,
         family,
         variant,
-        size: defaults.size,
+        size: resolved_size,
         source,
         dynamic,
         windows_ico,
@@ -278,11 +299,12 @@ pub(crate) fn parse_defaults(
 fn default_iconify_id(
     family: &str,
     variant: Option<&str>,
+    size: Option<u16>,
     defaults: &ManifestDefaults,
 ) -> Option<String> {
     let provider = defaults.provider.as_ref()?;
     let mut name = family.to_string();
-    if let Some(size) = defaults.size {
+    if let Some(size) = size {
         name.push('-');
         name.push_str(&size.to_string());
     }
@@ -536,6 +558,52 @@ mod tests {
             "#,
         );
         insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn numeric_path_segment_becomes_size_not_family() {
+        let (entries, errors) = entries_for(
+            r#"
+            [settings.20]
+            variants.filled = { file = "settings-20-filled.svg" }
+
+            [settings.24]
+            variants.filled = { file = "settings-24-filled.svg" }
+            "#,
+            with_root(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        insta::assert_debug_snapshot!(entries);
+    }
+
+    #[test]
+    fn numeric_path_segment_becomes_size_for_flat_entry() {
+        let (entries, errors) = entries_for(
+            r#"
+            [settings.20]
+            file = "settings-20.svg"
+            "#,
+            with_root(),
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        insta::assert_debug_snapshot!(entries);
+    }
+
+    #[test]
+    fn explicit_size_feeds_default_iconify_id() {
+        let defaults = ManifestDefaults {
+            provider: Some("fluent".to_string()),
+            ..ManifestDefaults::default()
+        };
+        let (entries, errors) = entries_for(
+            r#"
+            [settings.20]
+            variants.filled = {}
+            "#,
+            defaults,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        insta::assert_debug_snapshot!(entries);
     }
 
     #[test]

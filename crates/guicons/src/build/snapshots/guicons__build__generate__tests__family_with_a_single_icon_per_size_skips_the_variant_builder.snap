@@ -1,0 +1,18 @@
+---
+source: crates/guicons/src/build/generate.rs
+expression: generate_builders(&icons)
+---
+pub struct LogoBuilder;
+
+pub const fn logo() -> LogoBuilder {
+    LogoBuilder
+}
+
+impl LogoBuilder {
+    pub const fn size_16(self) -> IconKey {
+        keys::LOGO_16
+    }
+    pub const fn size_32(self) -> IconKey {
+        keys::LOGO_32
+    }
+}

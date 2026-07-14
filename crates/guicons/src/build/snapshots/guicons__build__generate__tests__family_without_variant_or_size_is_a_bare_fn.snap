@@ -1,0 +1,7 @@
+---
+source: crates/guicons/src/build/generate.rs
+expression: generate_builders(&icons)
+---
+pub const fn docker() -> IconKey {
+    keys::DOCKER
+}

@@ -1,0 +1,18 @@
+---
+source: crates/guicons/src/build/generate.rs
+expression: generate_builders(&icons)
+---
+pub struct SettingsBuilder;
+
+pub const fn settings() -> SettingsBuilder {
+    SettingsBuilder
+}
+
+impl SettingsBuilder {
+    pub const fn filled(self) -> IconKey {
+        keys::SETTINGS_FILLED
+    }
+    pub const fn regular(self) -> IconKey {
+        keys::SETTINGS_REGULAR
+    }
+}
