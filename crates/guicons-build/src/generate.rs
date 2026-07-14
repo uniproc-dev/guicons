@@ -1,17 +1,8 @@
-use super::load_icon_manifest;
-use super::materialize::{
-    materialize_icons, ImageKind, MaterializedIcon, MaterializedIconBackend,
-};
+use super::materialize::{ImageKind, MaterializedIcon, MaterializedIconBackend};
 use guicons_core::{rust_const_name, rust_fn_name};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-
-pub fn generate_rust_icon_registry(manifest_path: &Path, out_file: &Path, build_out_dir: &Path) {
-    let manifest = load_icon_manifest(manifest_path);
-    let icons = materialize_icons(&manifest, build_out_dir);
-    generate_rust_icon_registry_from_materialized(manifest_path, out_file, &icons);
-}
 
 pub(crate) fn generate_rust_icon_registry_from_materialized(
     manifest_path: &Path,

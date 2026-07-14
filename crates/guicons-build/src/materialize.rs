@@ -1,32 +1,32 @@
 use super::paths::{canonicalize_existing, current_dir};
-use super::{IconEntrySource, IconManifest};
+use guicons_core::{IconEntrySource, IconManifest};
 use guicons_net::{ensure_cached, iconify_cache_path, iconify_url, url_cache_path};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
-pub struct MaterializedIcon {
-    pub key: String,
-    pub family: String,
-    pub variant: Option<String>,
-    pub size: Option<u16>,
-    pub dynamic: bool,
-    pub backend: MaterializedIconBackend,
+pub(crate) struct MaterializedIcon {
+    pub(crate) key: String,
+    pub(crate) family: String,
+    pub(crate) variant: Option<String>,
+    pub(crate) size: Option<u16>,
+    pub(crate) dynamic: bool,
+    pub(crate) backend: MaterializedIconBackend,
 }
 
 #[derive(Clone, Debug)]
-pub enum MaterializedIconBackend {
+pub(crate) enum MaterializedIconBackend {
     Image { path: PathBuf, kind: ImageKind },
     Glyph { font_family: String, codepoint: char },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImageKind {
+pub(crate) enum ImageKind {
     Svg,
     Png,
 }
 
-pub fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -> Vec<MaterializedIcon> {
+pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -> Vec<MaterializedIcon> {
     let icons_dir = build_out_dir.join("icons");
     let _ = fs::create_dir_all(&icons_dir);
 

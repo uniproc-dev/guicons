@@ -21,9 +21,9 @@ file = "docker.svg"
 // build.rs
 fn main() {
     guicons_build::IconBuild::auto()
-        .emit_rust_registry(std::env::var("OUT_DIR").unwrap() + "/icons.rs")
-        .emit_slint_global(std::env::var("OUT_DIR").unwrap() + "/icons.slint")
-        .run();
+        .emit(guicons_build::Emit::Rust)
+        .emit(guicons_build::Emit::Slint)
+        .build();
 }
 ```
 

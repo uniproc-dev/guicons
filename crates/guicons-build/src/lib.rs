@@ -2,14 +2,13 @@ mod generate;
 mod materialize;
 mod paths;
 
+use guicons_core::IconManifest;
+use materialize::materialize_icons;
 use std::path::PathBuf;
 
-pub use generate::generate_rust_icon_registry;
-pub use guicons_core::{IconEntry, IconEntrySource, IconManifest};
 pub use guicons_net::ALLOW_NETWORK_ENV;
-pub use materialize::{materialize_icons, ImageKind, MaterializedIcon, MaterializedIconBackend};
 
-pub fn load_icon_manifest(manifest_path: &std::path::Path) -> IconManifest {
+fn load_icon_manifest(manifest_path: &std::path::Path) -> IconManifest {
     let (manifest, errors) = guicons_core::load_icon_manifest(manifest_path);
 
     for source_path in manifest.source_paths() {
@@ -28,11 +27,23 @@ pub fn load_icon_manifest(manifest_path: &std::path::Path) -> IconManifest {
     manifest
 }
 
+/// What to generate from the manifest. File names are fixed, not
+/// caller-configurable: `guicons`'s `include_icons!()` macro hardcodes
+/// `env!("OUT_DIR")` + `icons.rs`, so letting the Rust registry land
+/// anywhere else would silently break it.
+pub enum Emit {
+    /// `OUT_DIR/icons.rs` - the typed registry consumed by `include_icons!()`.
+    Rust,
+    /// `OUT_DIR/icons.slint` - the `Icon` component and per-icon assets.
+    Slint,
+}
+
 pub struct IconBuild {
     manifest_path: PathBuf,
+    out_dir: PathBuf,
     materialized_root: PathBuf,
-    rust_registry_out: Option<PathBuf>,
-    slint_global_out: Option<PathBuf>,
+    emit_rust: bool,
+    emit_slint: bool,
 }
 
 impl IconBuild {
@@ -40,9 +51,10 @@ impl IconBuild {
         let out_dir = paths::out_dir();
         Self {
             manifest_path: manifest_path.into(),
-            materialized_root: out_dir,
-            rust_registry_out: None,
-            slint_global_out: None,
+            materialized_root: out_dir.clone(),
+            out_dir,
+            emit_rust: false,
+            emit_slint: false,
         }
     }
 
@@ -55,30 +67,30 @@ impl IconBuild {
         self
     }
 
-    pub fn emit_rust_registry(mut self, out_file: impl Into<PathBuf>) -> Self {
-        self.rust_registry_out = Some(out_file.into());
+    pub fn emit(mut self, target: Emit) -> Self {
+        match target {
+            Emit::Rust => self.emit_rust = true,
+            Emit::Slint => self.emit_slint = true,
+        }
         self
     }
 
-    pub fn emit_slint_global(mut self, out_file: impl Into<PathBuf>) -> Self {
-        self.slint_global_out = Some(out_file.into());
-        self
-    }
-
-    pub fn run(self) {
+    pub fn build(self) {
         let manifest = load_icon_manifest(&self.manifest_path);
         let icons = materialize_icons(&manifest, &self.materialized_root);
 
-        if let Some(out_file) = &self.rust_registry_out {
+        if self.emit_rust {
+            let out_file = self.out_dir.join("icons.rs");
             generate::generate_rust_icon_registry_from_materialized(
                 manifest.manifest_path(),
-                out_file,
+                &out_file,
                 &icons,
             );
         }
 
-        if let Some(out_file) = &self.slint_global_out {
-            generate::generate_slint_icon_global_from_materialized(out_file, &icons);
+        if self.emit_slint {
+            let out_file = self.out_dir.join("icons.slint");
+            generate::generate_slint_icon_global_from_materialized(&out_file, &icons);
         }
     }
 }
