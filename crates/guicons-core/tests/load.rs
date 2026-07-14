@@ -12,19 +12,10 @@ fn write(dir: &Path, name: &str, content: &str) -> PathBuf {
     path
 }
 
-/// Renders `path` relative to `dir` with `/` separators, so snapshots stay
-/// stable across platforms and across the random tempdir name on every run.
-/// Canonicalizes both sides first: some paths here are canonicalized deeper
-/// in `load_icon_manifest` (picking up Windows' `\\?\` prefix) and some
-/// aren't (e.g. a file that was never found), so comparing raw strings
-/// would miss the match.
+/// Renders `path` relative to `dir` with `/` separators, for stable snapshots.
 fn rel(dir: &Path, path: &Path) -> String {
     let dir_canon = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     let path_canon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    // Canonicalizing a path that doesn't exist on disk (e.g. a manifest that
-    // failed to load) falls back to the raw form, which won't share the
-    // `dir_canon` prefix (Windows adds a `\\?\` prefix on canonicalization)
-    // - so also try stripping the raw, non-canonicalized `dir` as a fallback.
     if let Ok(suffix) = path_canon.strip_prefix(&dir_canon) {
         return suffix.display().to_string().replace('\\', "/");
     }

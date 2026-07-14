@@ -25,11 +25,6 @@ pub fn canonicalize_or_self(path: &Path) -> PathBuf {
 
 /// Walks up from `start` looking for the nearest `Cargo.toml` that declares
 /// `[workspace]` or `[package]`, i.e. the crate/workspace root.
-///
-/// Public because it's needed by more than just this parser: `guicons`'s
-/// `build.rs` codegen and `guicons-fetch`'s icon cache both need to find the
-/// same root (to locate `icons.gui.toml`/`.cache/guicons` respectively) and
-/// previously each carried their own copy of this exact walk.
 pub fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
     let mut current = canonicalize_or_self(start);
     loop {

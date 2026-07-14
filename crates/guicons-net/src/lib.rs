@@ -1,10 +1,7 @@
 //! Icon cache resolution and network fetch, shared by `guicons-build`'s
-//! codegen (materializing icons declared in `icons.gui.toml`) and
-//! `guicons-macros`' `icon!("set:name")` literal form (embedding an icon
-//! that isn't declared in any manifest at all). Both key the same on-disk
-//! cache by the exact same string (an iconify id, or a URL), so adding an
-//! icon to the manifest later doesn't change what an existing `icon!(...)`
-//! call site resolves to - they just happen to share a cache entry.
+//! codegen and `guicons-macros`' `icon!("set:name")` literal form. Both key
+//! the same on-disk cache by the same string, so an icon later added to the
+//! manifest keeps resolving to what an existing `icon!(...)` call already got.
 
 use guicons_core::{canonicalize_or_self, find_workspace_root_from};
 use sha2::{Digest, Sha256};

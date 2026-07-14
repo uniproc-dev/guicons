@@ -23,15 +23,10 @@ struct IconMacroInput {
     module: Ident,
 }
 
-/// `guicons::icon!` accepts two unrelated shapes of selector:
-///
-/// - `family`/`family.variant`/`"family/variant"` - resolved against
-///   `icons.gui.toml`, expands to a `keys::` constant (an `IconKey`).
-/// - `"set:name"` (a raw iconify id, straight off iconify.design) - resolved
-///   through `guicons-net`'s cache directly, with **no manifest lookup at
-///   all**, expanding to `IconData` instead. Adding the same id to the
-///   manifest later doesn't change what an existing call site resolves to:
-///   both paths key the on-disk cache by the exact same string.
+/// `guicons::icon!` accepts two unrelated selector shapes:
+/// `family`/`family.variant` resolves against `icons.gui.toml` to an
+/// `IconKey`; `"set:name"` (a raw iconify id) resolves through
+/// `guicons-net`'s cache with no manifest lookup, to `IconData` instead.
 #[derive(Clone, Debug)]
 enum IconSelector {
     FamilyVariant { family: String, variant: Option<String> },
@@ -97,8 +92,6 @@ fn expand_family_variant(
     Ok(quote! { #module::keys::#key_ident })
 }
 
-/// Resolves a raw `"set:name"` iconify id straight through `guicons-net`'s
-/// cache - no manifest, no registry, just the SVG bytes for this one icon.
 fn expand_iconify_literal(id: &str) -> Result<proc_macro2::TokenStream> {
     let start = manifest_dir()?;
     let cache_path = guicons_net::iconify_cache_path(&start, id);

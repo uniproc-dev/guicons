@@ -27,14 +27,11 @@ fn load_icon_manifest(manifest_path: &std::path::Path) -> IconManifest {
     manifest
 }
 
-/// What to generate from the manifest. File names are fixed, not
-/// caller-configurable: `guicons`'s `include_icons!()` macro hardcodes
-/// `env!("OUT_DIR")` + `icons.rs`, so letting the Rust registry land
-/// anywhere else would silently break it.
+/// What to generate from the manifest. Output paths are fixed (`OUT_DIR/icons.rs`,
+/// `OUT_DIR/icons.slint`), not caller-configurable: `include_icons!()` hardcodes
+/// the Rust registry's location, so it can't be allowed to move.
 pub enum Emit {
-    /// `OUT_DIR/icons.rs` - the typed registry consumed by `include_icons!()`.
     Rust,
-    /// `OUT_DIR/icons.slint` - the `Icon` component and per-icon assets.
     Slint,
 }
 

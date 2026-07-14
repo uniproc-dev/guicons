@@ -79,6 +79,8 @@ impl IconEntry {
         self.variant.as_deref()
     }
 
+    /// From a `[family.N]` numeric path segment, or inherited from
+    /// `defaults.size` - not a separate manifest keyword.
     pub fn size(&self) -> Option<u16> {
         self.size
     }

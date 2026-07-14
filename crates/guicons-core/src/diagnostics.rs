@@ -2,13 +2,8 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-/// A single problem found while parsing a manifest.
-///
-/// Carries enough location info (file + byte span) to render as an editor
-/// diagnostic, which is the whole point of not panicking here: the same
-/// parser backs both `build.rs` (which turns every [`ManifestError`] into a
-/// single fatal panic message) and, eventually, an LSP (which wants to show
-/// every problem in the file at once, not just the first one it tripped on).
+/// A single problem found while parsing a manifest, with enough location
+/// info (file + byte span) to point at it in an editor.
 #[derive(Clone, Debug)]
 pub struct ManifestError {
     pub file: PathBuf,
@@ -48,12 +43,10 @@ impl Diagnostics<'_> {
         });
     }
 
-    /// Records a single `toml_span` parse/deserialize error, carrying its span across.
     pub(crate) fn push_toml_error(&mut self, error: toml_span::Error) {
         self.error(Some(error.span.into()), error.to_string());
     }
 
-    /// Records every error accumulated by a `toml_span::TableHelper` pass.
     pub(crate) fn push_deser_error(&mut self, error: toml_span::DeserError) {
         for error in error.errors {
             self.push_toml_error(error);

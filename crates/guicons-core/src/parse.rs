@@ -23,12 +23,6 @@ const ENTRY_KEYS: &[&str] = &[
 ];
 pub(crate) const RESERVED_TOP_LEVEL: &[&str] = &["defaults", "include", "providers"];
 
-/// Checks that `[providers]` is a table, if present.
-///
-/// This is the only reserved top-level section without its own shape check
-/// elsewhere: `[defaults]` is validated by `parse_defaults`, `[include]` by
-/// `collect_includes` in `crate::load` - checking them here too would just
-/// report the same "must be a table" error twice.
 pub(crate) fn check_reserved_top_level(table: &Table<'_>, diags: &mut Diagnostics) {
     if let Some(value) = table.get("providers") {
         if value.as_table().is_none() {
@@ -37,7 +31,6 @@ pub(crate) fn check_reserved_top_level(table: &Table<'_>, diags: &mut Diagnostic
     }
 }
 
-/// Takes the inner table out of `value`, leaving it consumed either way.
 fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     match value.take() {
         ValueInner::Table(table) => Some(table),
@@ -45,11 +38,6 @@ fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     }
 }
 
-/// A trailing numeric path segment (e.g. `[settings.20]`) is a size, not part
-/// of the family name - `settings.20.variants.filled` should produce family
-/// `settings` with size `20`, not family `settings-20`. This mirrors how
-/// `variants.*` is a dedicated axis, without needing a dedicated manifest
-/// keyword for it: any nested group whose name is just a number is size.
 fn split_family_and_size(path: &[String]) -> (String, Option<u16>) {
     if let Some((last, rest)) = path.split_last() {
         if let Ok(size) = last.parse::<u16>() {
@@ -150,7 +138,6 @@ pub(crate) fn collect_entries(
     }
 }
 
-/// `Table` doesn't carry its own span, so approximate one from its widest member.
 fn table_span(table: &Table<'_>) -> Span {
     table.values().fold(Span::new(usize::MAX, 0), |acc, value| {
         Span::new(acc.start.min(value.span.start), acc.end.max(value.span.end))

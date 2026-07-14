@@ -185,16 +185,6 @@ pub fn resolve<'a>(icon: impl Into<IconRef<'a>>) -> Option<IconData> {{
     write_if_changed(out_file, &generated);
 }
 
-/// Generates one typed builder per family, so callers pick an icon through
-/// `settings().filled()` instead of by string.
-///
-/// Families group by `icon.family`. Within a family, icons without an
-/// explicit size (`icon.size == None`) become plain methods (or, if there's
-/// exactly one and it has no variant either, a bare `fn` returning `IconKey`
-/// directly - no builder needed). Icons with an explicit size (`[family.N]`
-/// in the manifest) each get their own `size_N()` step, only exposing the
-/// variants that actually exist at that size - never the full cartesian
-/// product of every variant/size the manifest happens to mention elsewhere.
 fn generate_builders(icons: &[MaterializedIcon]) -> String {
     let mut families: BTreeMap<&str, Vec<&MaterializedIcon>> = BTreeMap::new();
     for icon in icons {
@@ -221,8 +211,6 @@ fn generate_family_builder(family: &str, members: &[&MaterializedIcon]) -> Strin
     let fn_name = rust_fn_name(family);
     let type_name = rust_variant_name(family);
 
-    // No family in the manifest actually varies by size - the common case.
-    // Keep the plain `fn`/2-tier-builder shape, no `size_N()` step at all.
     if sized.is_empty() {
         return generate_leaf(&fn_name, &format!("{type_name}Builder"), &unsized_icons);
     }
@@ -255,8 +243,6 @@ fn generate_family_builder(family: &str, members: &[&MaterializedIcon]) -> Strin
     )
 }
 
-/// Emits either a bare `fn` (single icon, no variant - the common
-/// no-variant-no-size case) or a marker struct + one method per variant.
 fn generate_leaf(fn_name: &str, builder_type: &str, icons: &[&MaterializedIcon]) -> String {
     if let [icon] = icons {
         if icon.variant.is_none() {
@@ -273,9 +259,6 @@ fn generate_leaf(fn_name: &str, builder_type: &str, icons: &[&MaterializedIcon])
     )
 }
 
-/// One method per icon in `icons`. Named after the icon's variant, or
-/// `default` for the rare icon that has no variant but still had to share a
-/// builder with sized siblings (see `generate_family_builder`).
 fn generate_group_methods(icons: &[&MaterializedIcon]) -> String {
     icons
         .iter()
@@ -343,9 +326,8 @@ pub(crate) fn generate_slint_icon_global_from_materialized(
     write_if_changed(out_file, &generated);
 }
 
-/// Just the file name, not the full (often username-bearing) absolute path -
-/// this only ends up in a source comment, so leaking `C:\Users\<name>\...`
-/// into a committed/shared generated file isn't worth the extra context.
+/// Avoids leaking the full (username-bearing) absolute path into the
+/// generated file's header comment.
 fn manifest_file_name(manifest_path: &Path) -> String {
     manifest_path
         .file_name()
