@@ -650,3 +650,22 @@ async fn completion_inside_link_includes_lists_matching_manifests() {
     assert!(labels.contains(&"nav.gui.toml"), "{labels:?}");
 }
 
+
+#[tokio::test]
+async fn initialize_reads_the_report_toml_syntax_errors_option() {
+    let (mut service, _socket) = guicons_lsp::service();
+    assert!(service.inner().reports_toml_syntax_errors(), "defaults to on");
+
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({
+            "capabilities": {},
+            "initializationOptions": { "reportTomlSyntaxErrors": false }
+        })),
+        Some(1),
+    )
+    .await;
+
+    assert!(!service.inner().reports_toml_syntax_errors());
+}

@@ -45,6 +45,13 @@ fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String 
     }
 }
 
+/// Whether a manifest error should be published, given the
+/// `reportTomlSyntaxErrors` setting - only raw TOML syntax errors are
+/// ever suppressed, never semantic ones (unknown field, missing source, ...).
+fn should_report_error(message: &str, report_toml_syntax_errors: bool) -> bool {
+    report_toml_syntax_errors || !message.starts_with("TOML syntax error:")
+}
+
 /// `file`/`windows-ico` targets that don't exist on disk - not caught by
 /// `guicons_core` at all (it only validates manifest *shape*), so this is
 /// entirely an editor-tooling-side check.
@@ -143,16 +150,35 @@ fn resolve_file_base_dir(manifest_path: &Path, text: &str) -> PathBuf {
 pub struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
+    /// Whether to publish raw `TOML syntax error: ...` diagnostics -
+    /// configurable (`initializationOptions: { "reportTomlSyntaxErrors":
+    /// false }`) since an editor with its own TOML language support (e.g.
+    /// JetBrains IDEs) already reports these, and having both report the
+    /// same syntax error twice is just noise. Semantic diagnostics
+    /// (unknown field, missing file, ...) aren't affected by this flag.
+    report_toml_syntax_errors: std::sync::atomic::AtomicBool,
 }
 
 /// Constructs the `tower_lsp` service pair (server-side handle + client
 /// socket) - the same shape [`tower_lsp::Server`] runs over stdio in
 /// `main`, split out so tests can drive it over an in-memory duplex pipe.
 pub fn service() -> (LspService<Backend>, ClientSocket) {
-    LspService::new(|client| Backend { client, documents: RwLock::new(HashMap::new()) })
+    LspService::new(|client| Backend {
+        client,
+        documents: RwLock::new(HashMap::new()),
+        report_toml_syntax_errors: std::sync::atomic::AtomicBool::new(true),
+    })
 }
 
 impl Backend {
+    /// Exposed for tests driving the server through the real
+    /// `initialize` request, to confirm `initializationOptions` was
+    /// actually read - not part of the LSP surface itself.
+    #[doc(hidden)]
+    pub fn reports_toml_syntax_errors(&self) -> bool {
+        self.report_toml_syntax_errors.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Canonicalized to match `IconEntry::file()`, which `guicons_core`
     /// also stamps with a canonicalized path.
     fn path_for_uri(uri: &Url) -> Option<PathBuf> {
@@ -173,9 +199,11 @@ impl Backend {
 
         let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, &text);
         let index = LineIndex::new(&text);
+        let report_syntax_errors = self.report_toml_syntax_errors.load(std::sync::atomic::Ordering::Relaxed);
         let mut diagnostics: Vec<Diagnostic> = errors
             .iter()
             .filter(|error| error.file == path)
+            .filter(|error| should_report_error(&error.message, report_syntax_errors))
             .map(|error| Diagnostic {
                 range: match &error.span {
                     Some(span) => index.range(&text, span.clone()),
@@ -195,7 +223,16 @@ impl Backend {
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(report) = params
+            .initialization_options
+            .as_ref()
+            .and_then(|options| options.get("reportTomlSyntaxErrors"))
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.report_toml_syntax_errors.store(report, std::sync::atomic::Ordering::Relaxed);
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
@@ -530,5 +567,19 @@ mod tests {
         assert_eq!(levenshtein("docker", "docker"), 0);
         assert_eq!(levenshtein("docker", "dokcer"), 2);
         assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    #[test]
+    fn toml_syntax_errors_are_suppressed_only_when_configured_off() {
+        let message = "TOML syntax error: expected a right bracket, found a newline";
+        assert!(should_report_error(message, true));
+        assert!(!should_report_error(message, false));
+    }
+
+    #[test]
+    fn semantic_errors_are_never_suppressed_by_the_toml_syntax_error_setting() {
+        let message = "unexpected field(s): `bogus` (expected one of: `file`)";
+        assert!(should_report_error(message, true));
+        assert!(should_report_error(message, false));
     }
 }
