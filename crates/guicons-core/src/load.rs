@@ -25,7 +25,28 @@ pub fn load_icon_manifest(manifest_path: &Path) -> (IconManifest, Vec<ManifestEr
     let mut source_paths = Vec::new();
     let mut errors = Vec::new();
     let manifest =
-        load_icon_manifest_inner(manifest_path, &mut seen, &mut source_paths, &mut errors);
+        load_icon_manifest_inner(manifest_path, &mut seen, &mut source_paths, &mut errors, None);
+    (manifest, errors)
+}
+
+/// Like [`load_icon_manifest`], but parses `content` for the root document
+/// instead of reading `manifest_path` from disk - for editor tooling that
+/// wants diagnostics against unsaved buffer content. Any `[include]`d files
+/// are still read from disk as usual (they aren't the document being edited).
+pub fn load_icon_manifest_from_str(
+    manifest_path: &Path,
+    content: &str,
+) -> (IconManifest, Vec<ManifestError>) {
+    let mut seen = Vec::new();
+    let mut source_paths = Vec::new();
+    let mut errors = Vec::new();
+    let manifest = load_icon_manifest_inner(
+        manifest_path,
+        &mut seen,
+        &mut source_paths,
+        &mut errors,
+        Some(content),
+    );
     (manifest, errors)
 }
 
@@ -67,6 +88,7 @@ fn load_icon_manifest_inner(
     seen: &mut Vec<PathBuf>,
     source_paths: &mut Vec<PathBuf>,
     errors: &mut Vec<ManifestError>,
+    content_override: Option<&str>,
 ) -> IconManifest {
     let manifest_path = canonicalize_or_self(manifest_path);
 
@@ -81,20 +103,27 @@ fn load_icon_manifest_inner(
     seen.push(manifest_path.clone());
     source_paths.push(manifest_path.clone());
 
-    let content = match fs::read_to_string(&manifest_path) {
-        Ok(content) => content,
-        Err(e) => {
-            errors.push(ManifestError {
-                file: manifest_path.clone(),
-                span: None,
-                message: format!("failed to read file: {e}"),
-            });
-            seen.pop();
-            return empty_manifest(&manifest_path);
-        }
+    let owned_content;
+    let content = match content_override {
+        Some(content) => content,
+        None => match fs::read_to_string(&manifest_path) {
+            Ok(content) => {
+                owned_content = content;
+                &owned_content
+            }
+            Err(e) => {
+                errors.push(ManifestError {
+                    file: manifest_path.clone(),
+                    span: None,
+                    message: format!("failed to read file: {e}"),
+                });
+                seen.pop();
+                return empty_manifest(&manifest_path);
+            }
+        },
     };
 
-    let mut root_value = match toml_span::parse(&content) {
+    let mut root_value = match toml_span::parse(content) {
         Ok(value) => value,
         Err(e) => {
             errors.push(ManifestError {
@@ -213,7 +242,7 @@ fn collect_includes(
             continue;
         };
         let child = resolve_entry_path(base, path);
-        let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors);
+        let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors, None);
         entries_acc.extend(child_manifest.entries);
         providers_acc.extend(child_manifest.providers);
     }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ pub struct IconEntry {
     pub(crate) source: IconEntrySource,
     pub(crate) dynamic: bool,
     pub(crate) windows_ico: Option<PathBuf>,
+    pub(crate) span: Range<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,5 +136,12 @@ impl IconEntry {
 
     pub fn windows_ico(&self) -> Option<&Path> {
         self.windows_ico.as_deref()
+    }
+
+    /// Byte range of this entry's table in the manifest source (the
+    /// variant's inline table, or the flat entry's table) - for editor
+    /// tooling that needs to map a cursor position back to an entry.
+    pub fn span(&self) -> Range<usize> {
+        self.span.clone()
     }
 }

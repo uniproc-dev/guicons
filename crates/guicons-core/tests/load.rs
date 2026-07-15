@@ -1,4 +1,4 @@
-use guicons_core::{load_icon_manifest, IconEntry, IconEntrySource, ManifestError};
+use guicons_core::{load_icon_manifest, load_icon_manifest_from_str, IconEntry, IconEntrySource, ManifestError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -261,4 +261,58 @@ fn entries_are_sorted_by_key_across_includes() {
     let (manifest, errors) = load_icon_manifest(&root);
     assert!(errors.is_empty(), "{errors:?}");
     insta::assert_debug_snapshot!(summarize_entries(dir.path(), manifest.entries()));
+}
+
+#[test]
+fn load_from_str_prefers_the_given_content_over_the_on_disk_file() {
+    let dir = tempdir().unwrap();
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [docker]
+        file = "docker.svg"
+        "#,
+    );
+
+    let unsaved_content = r#"
+    [docker]
+    file = "docker.svg"
+
+    [settings]
+    file = "settings.svg"
+    "#;
+    let (manifest, errors) = load_icon_manifest_from_str(&root, unsaved_content);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(manifest.entry_for_key("settings").is_some(), "should reflect unsaved content, not the file on disk");
+
+    let (on_disk_manifest, errors) = load_icon_manifest(&root);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(on_disk_manifest.entry_for_key("settings").is_none());
+}
+
+#[test]
+fn load_from_str_still_resolves_includes_from_disk() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "icons/nav.gui.toml",
+        r#"
+        [back]
+        file = "back.svg"
+        "#,
+    );
+    let root_path = dir.path().join("icons.gui.toml");
+
+    let unsaved_content = r#"
+    [include]
+    nav = "icons/nav.gui.toml"
+
+    [docker]
+    file = "docker.svg"
+    "#;
+    let (manifest, errors) = load_icon_manifest_from_str(&root_path, unsaved_content);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(manifest.entry_for_key("docker").is_some());
+    assert!(manifest.entry_for_key("back").is_some());
 }

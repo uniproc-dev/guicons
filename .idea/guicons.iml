@@ -15,6 +15,8 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-cli/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-cli/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-core/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/guicons-lsp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/guicons-lsp/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-net/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/crates/guicons/tests/fixtures/basic-file-variants/target" />

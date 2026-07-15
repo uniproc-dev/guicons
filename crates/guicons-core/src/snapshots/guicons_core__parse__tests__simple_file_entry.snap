@@ -13,5 +13,6 @@ expression: entries
         ),
         dynamic: false,
         windows_ico: None,
+        span: 44..56,
     },
 ]

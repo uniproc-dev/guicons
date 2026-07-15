@@ -1,8 +1,73 @@
 # guicons
 
-`guicons` is a manifest-driven icon system for native Rust GUI applications.
-It provides a small runtime API plus optional build-time code generation for
-typed icon registries and Slint components.
+A manifest-driven icon system for native Rust GUI applications: describe
+your icon set once in TOML (local files, URLs, iconify.design ids, font
+glyphs, mixed freely), get a typed Rust registry, a Slint component, and
+a compile-time-checked `icon!` macro that hands your GUI framework its
+native image type directly.
+
+## Why guicons?
+
+Most native Rust GUI apps hardcode `include_bytes!` per icon by hand - no
+manifest, no shared registry, no compile-time check that a referenced
+icon actually exists in the set. guicons gives you that single source of
+truth, with codegen and a macro on top so referencing an icon is a
+typed, checked operation instead of a bare file path.
+
+See [Alternatives](#alternatives) for how this compares to icon-font
+crates and the `iconify` crate.
+
+## Features
+
+- **One manifest, `icons.gui.toml`**: family/variant/size axes,
+  `[include]` to split across files, `[defaults]` for shared root/
+  provider/size, `[providers.<name>]` schemas (built-in for Fluent,
+  Phosphor, Material Symbols, Heroicons, Bootstrap Icons, Tabler, with
+  per-field `.override`).
+- **Any source, mixed freely**: local file, URL, iconify.design id
+  (auto-fetched and cached offline), or a font glyph
+  (`font-family:codepoint`).
+- **Typed build-time codegen** (`guicons-build`): a Rust registry with
+  per-family/size builder methods, and a matching Slint `Icon`
+  component - no cartesian product of nonexistent combinations.
+- **`guicons::icon!`**: resolves a selector against your manifest at
+  compile time straight into your active GUI framework's native type
+  (`slint::Image`, an iced `Handle`) - no `image_from_data` wrapping at
+  the call site. `icon_key!` resolves to the manifest's `IconKey`
+  constant instead; `icon_data!` always resolves to the plain,
+  framework-agnostic `IconData`.
+- **Slint integration out of the box**, with a runnable example in
+  `crates/guicons/examples/`.
+- **`icons` CLI** (`guicons-cli`): `icons fetch`/`update` to populate the
+  offline cache, `icons add <iconify-id|file>` to add an icon with one
+  command - it reverse-parses a pasted iconify id (e.g.
+  `fluent:settings-24-regular`) into family/size/variant using the
+  provider schema, and writes it into the manifest round-trip,
+  preserving the rest of the file's formatting/comments.
+
+## Alternatives
+
+- **Icon-font crates** (`iced_fontello`, `egui_material_icons`,
+  `iconflow`, `free-icons`, `icondata`): bundle someone else's whole
+  public icon pack (as a font or SVG data), not a curated set from your
+  own mix of sources. Good fit if you just want "give me Bootstrap
+  Icons"; not if you have your own custom icons plus a few from a
+  provider.
+- **[`iconify`](https://docs.rs/iconify)**: closest to guicons'
+  iconify-fetch piece alone - compile-time download, cache, and embed of
+  a single id via `iconify::svg!("mdi:home")`. No manifest, no family/
+  variant/size model, no local-file/URL/glyph sources, and it hands back
+  a raw SVG string rather than converting to your GUI framework's native
+  image type.
+- **Hand-rolled `include_bytes!`**: what most apps actually do, and a
+  file-path typo is already a compile error either way. What it doesn't
+  give you: one manifest listing every icon your app uses instead of
+  paths scattered across the codebase, iconify/URL fetching with an
+  offline cache (`include_bytes!` can only embed a file you already have
+  on disk), or generated per-family/variant/size builder methods instead
+  of hand-writing a constant per icon.
+
+## Usage
 
 ```toml
 # icons.gui.toml
@@ -66,15 +131,20 @@ let key = guicons::icon_key!(settings.filled); // icons::keys::SETTINGS_FILLED
 ### Slint (`slint` feature)
 
 The generated `icons.slint` (from `Emit::Slint` above) exports an `Icon`
-component that switches on a `name` property - `import` it from your own
-`.slint` files:
+component that switches on a `name` property, plus one typed component
+per icon (`settings-filled` → `SettingsFilledIcon`) - `import` either
+from your own `.slint` files:
 
 ```slint
-import { Icon } from "icons.slint"; // resolved via an include path pointing at OUT_DIR
+import { Icon, SettingsFilledIcon } from "icons.slint"; // resolved via an include path pointing at OUT_DIR
 
+// Dynamic - runtime string match against `name`
 Icon {
     name: "settings-filled";
 }
+
+// Typed - one exported component per icon, checked at compile time
+SettingsFilledIcon {}
 ```
 
 For icon data you don't already have as `icon!` output - e.g. resolved at

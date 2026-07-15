@@ -223,6 +223,7 @@ fn parse_entry(
         source,
         dynamic,
         windows_ico,
+        span: table_span.into(),
     })
 }
 
@@ -387,6 +388,12 @@ fn builtin_providers() -> &'static HashMap<String, ProviderSchema> {
             })
             .collect()
     })
+}
+
+/// Names of the providers with a built-in schema (`fluent`, `ph`, etc.) -
+/// for editor tooling offering completion on `[providers.<name>]`.
+pub fn builtin_provider_names() -> impl Iterator<Item = &'static str> {
+    builtin_providers().keys().map(String::as_str)
 }
 
 /// Resolves one manifest's `[providers.*]` declarations against the builtin
