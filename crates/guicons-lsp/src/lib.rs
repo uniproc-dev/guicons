@@ -1,13 +1,46 @@
+mod manifest_text;
 mod position;
 
+use guicons_core::{IconEntrySource, IconManifest};
+use manifest_text::{family_header_at, include_target_at};
 use position::LineIndex;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService};
+
+/// Renders `path` for display: relative to the workspace root or the
+/// manifest's own directory when possible (both are "not noise"), falling
+/// back to the absolute path only if neither contains it. Always
+/// forward-slashed - `Path::display()` on Windows keeps `\`, and
+/// `{:?}`/Debug escapes it as `\\`, both of which are just noise here.
+fn display_path(path: &Path, manifest: &IconManifest) -> String {
+    if let Ok(rel) = path.strip_prefix(manifest.workspace_root()) {
+        return normalize_slashes(rel);
+    }
+    if let Some(manifest_dir) = manifest.manifest_path().parent() {
+        if let Ok(rel) = path.strip_prefix(manifest_dir) {
+            return normalize_slashes(rel);
+        }
+    }
+    normalize_slashes(path)
+}
+
+fn normalize_slashes(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String {
+    match source {
+        IconEntrySource::File(path) => format!("file `{}`", display_path(path, manifest)),
+        IconEntrySource::Iconify(id) => format!("iconify `{id}`"),
+        IconEntrySource::Url(url) => format!("url `{url}`"),
+        IconEntrySource::Glyph(spec) => format!("glyph `{spec}`"),
+    }
+}
 
 pub struct Backend {
     client: Client,
@@ -68,6 +101,7 @@ impl LanguageServer for Backend {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                definition_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
@@ -138,6 +172,30 @@ impl LanguageServer for Backend {
         let Some(offset) = index.offset(&text, position) else { return Ok(None) };
 
         let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
+
+        if let Some((family, size)) = family_header_at(&text, offset) {
+            let variants: Vec<_> = manifest
+                .entries()
+                .iter()
+                .filter(|entry| entry.file() == path && entry.family() == family && (size.is_none() || entry.size() == size))
+                .collect();
+            if !variants.is_empty() {
+                let mut lines = vec![format!("**{family}**")];
+                for entry in variants {
+                    let variant = entry.variant().unwrap_or("(no variant)");
+                    let size_suffix = entry.size().map(|s| format!(" @ {s}")).unwrap_or_default();
+                    lines.push(format!("- `{variant}`{size_suffix}: {}", describe_source(entry.source(), &manifest)));
+                }
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: lines.join("\n"),
+                    }),
+                    range: None,
+                }));
+            }
+        }
+
         let Some(entry) = manifest
             .entries()
             .iter()
@@ -154,7 +212,7 @@ impl LanguageServer for Backend {
         if let Some(size) = entry.size() {
             lines.push(format!("- size: `{size}`"));
         }
-        lines.push(format!("- source: `{:?}`", entry.source()));
+        lines.push(format!("- source: {}", describe_source(entry.source(), &manifest)));
 
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -163,6 +221,42 @@ impl LanguageServer for Backend {
             }),
             range: Some(index.range(&text, entry.span())),
         }))
+    }
+
+    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+
+        let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
+        let Some(text) = self.document_text(&uri).await else { return Ok(None) };
+        let index = LineIndex::new(&text);
+        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
+
+        let start_of_file = Range::new(Position::new(0, 0), Position::new(0, 0));
+
+        if let Some(target) = include_target_at(&text, offset) {
+            let base = path.parent().unwrap_or_else(|| Path::new("."));
+            let resolved = guicons_core::canonicalize_or_self(&base.join(target));
+            if let Ok(target_uri) = Url::from_file_path(&resolved) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, start_of_file))));
+            }
+        }
+
+        let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
+        let Some(entry) = manifest
+            .entries()
+            .iter()
+            .find(|entry| entry.file() == path && entry.span().contains(&offset))
+        else {
+            return Ok(None);
+        };
+        if let IconEntrySource::File(source_path) = entry.source() {
+            if let Ok(target_uri) = Url::from_file_path(source_path) {
+                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, start_of_file))));
+            }
+        }
+
+        Ok(None)
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

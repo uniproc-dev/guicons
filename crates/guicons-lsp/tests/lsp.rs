@@ -185,3 +185,115 @@ async fn completion_inside_providers_header_lists_builtin_names() {
     let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
     assert!(labels.contains(&"fluent"), "{labels:?}");
 }
+
+#[tokio::test]
+async fn hover_on_a_family_header_lists_its_variants_with_relative_paths() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "settings-filled.svg", "<svg/>");
+    write(dir.path(), "settings-regular.svg", "<svg/>");
+    let content = "[settings]\nvariants.filled = { file = \"settings-filled.svg\" }\nvariants.regular = { file = \"settings-regular.svg\" }\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 3 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("filled"), "{value}");
+    assert!(value.contains("regular"), "{value}");
+    assert!(value.contains("settings-filled.svg"), "{value}");
+    assert!(!value.contains('\\'), "path should be forward-slashed, not escaped: {value}");
+    assert!(!value.contains("File("), "source should be described nicely, not Debug-formatted: {value}");
+}
+
+#[tokio::test]
+async fn goto_definition_on_an_entry_jumps_to_its_asset_file() {
+    let dir = tempdir().unwrap();
+    let asset = write(dir.path(), "docker.svg", "<svg/>");
+    let content = "[docker]\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/definition",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 10 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("definition response");
+
+    let target = result["uri"].as_str().expect("scalar location");
+    let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
+    assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(asset).unwrap());
+}
+
+#[tokio::test]
+async fn goto_definition_on_an_include_target_jumps_to_the_included_file() {
+    let dir = tempdir().unwrap();
+    let nav = write(dir.path(), "nav.gui.toml", "[back]\nfile = \"back.svg\"\n");
+    let content = "[include]\nnav = \"nav.gui.toml\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/definition",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 10 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("definition response");
+
+    let target = result["uri"].as_str().expect("scalar location");
+    let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
+    assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(nav).unwrap());
+}
