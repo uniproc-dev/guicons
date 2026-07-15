@@ -37,8 +37,8 @@ mod tests {
     }
 
     #[test]
-    fn icon_macro_resolves_a_bare_iconify_literal_from_cache() {
-        match guicons::icon!("testset:gear") {
+    fn icon_data_macro_resolves_a_bare_iconify_literal_from_cache() {
+        match guicons::icon_data!("testset:gear") {
             guicons::IconData::Svg(bytes) => {
                 assert!(bytes.starts_with(b"<svg"));
                 assert!(String::from_utf8_lossy(bytes).contains("circle"));
@@ -98,11 +98,20 @@ mod tests {
     }
 
     #[test]
-    fn icon_macro_resolves_a_manifest_selector_directly_to_data() {
-        match guicons::icon!(settings.filled) {
+    fn icon_data_macro_resolves_a_manifest_selector_directly_to_data() {
+        match guicons::icon_data!(settings.filled) {
             guicons::IconData::Svg(bytes) => assert!(bytes.starts_with(b"<svg")),
             other => panic!("expected svg icon data, got {other:?}"),
         }
+    }
+
+    /// This fixture has the `slint` feature active, so `icon!` (unlike
+    /// `icon_data!` above) auto-targets `slint::Image` directly - no
+    /// `image_from_data` wrapping needed at the use site.
+    #[test]
+    fn icon_macro_auto_targets_native_slint_image_when_slint_feature_is_active() {
+        let image: slint::Image = guicons::icon!(settings.filled);
+        assert!(image.size().width > 0);
     }
 
     #[test]

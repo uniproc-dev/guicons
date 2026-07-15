@@ -8,6 +8,10 @@ description = "Proc macros for guicons"
 [lib]
 proc-macro = true
 
+[features]
+slint = []
+iced = []
+
 [dependencies]
 guicons-core = { path = "../guicons-core" }
 guicons-net = { path = "../guicons-net" }

@@ -9,12 +9,53 @@ use winnow::combinator::{opt, preceded, repeat};
 use winnow::token::{literal, one_of};
 use winnow::{Parser, Result as WinnowResult};
 
-/// Resolves a selector to raw icon data (`IconData`) at compile time, no
-/// manifest-key indirection - the "just give me the bytes" path.
+#[cfg(all(feature = "slint", feature = "iced"))]
+compile_error!(
+    "guicons-macros: enable only one of the `slint`/`iced` features at a time - `icon!` picks its \
+     target automatically from whichever is active. Use `icon_data!` if you need the plain `IconData` \
+     regardless of which GUI feature is enabled."
+);
+
+/// Which native type `icon!` emits, chosen automatically from whichever of
+/// `guicons-macros`' `slint`/`iced` features is active (mirrored from
+/// `guicons`' own features of the same name). Falls back to `IconData`
+/// when neither is enabled.
+#[derive(Clone, Copy)]
+enum Target {
+    Data,
+    #[cfg(feature = "slint")]
+    Slint,
+    #[cfg(feature = "iced")]
+    Iced,
+}
+
+fn active_target() -> Target {
+    #[cfg(feature = "slint")]
+    return Target::Slint;
+    #[cfg(feature = "iced")]
+    return Target::Iced;
+    #[allow(unreachable_code)]
+    Target::Data
+}
+
+/// Resolves a selector straight to the native icon type for whichever GUI
+/// feature is active (`slint`/`iced`), or to `IconData` if neither is - no
+/// manifest-key indirection, no wrapping call needed at the use site. Use
+/// [`icon_data!`] to always get `IconData`, regardless of active features.
 #[proc_macro]
 pub fn icon(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as IconMacroInput);
-    expand_icon(input)
+    expand_icon(input, active_target())
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Like [`icon!`], but always resolves to plain `IconData` - the explicit
+/// escape hatch from `icon!`'s automatic native-type target.
+#[proc_macro]
+pub fn icon_data(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as IconMacroInput);
+    expand_icon(input, Target::Data)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -81,12 +122,12 @@ impl Parse for IconMacroInput {
     }
 }
 
-fn expand_icon(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
+fn expand_icon(input: IconMacroInput, target: Target) -> Result<proc_macro2::TokenStream> {
     match input.selector {
         IconSelector::FamilyVariant { family, size, variant } => {
-            expand_family_variant_data(&family, size, variant.as_deref())
+            expand_family_variant_data(&family, size, variant.as_deref(), target)
         }
-        IconSelector::Iconify(id) => expand_iconify_literal(&id),
+        IconSelector::Iconify(id) => expand_iconify_literal(&id, target),
     }
 }
 
@@ -126,10 +167,18 @@ fn expand_family_variant_key(
     Ok(quote! { #module::keys::#key_ident })
 }
 
+/// What an entry's source resolves to, before deciding which native type
+/// (or plain `IconData`) to wrap it in for the requested [`Target`].
+enum ResolvedSource {
+    Image { path: String, kind: &'static str },
+    Glyph { font_family: String, codepoint: char },
+}
+
 fn expand_family_variant_data(
     family: &str,
     size: Option<u16>,
     variant: Option<&str>,
+    target: Target,
 ) -> Result<proc_macro2::TokenStream> {
     let manifest_path = manifest_dir()?.join("icons.gui.toml");
     let manifest = load_manifest(&manifest_path)?;
@@ -143,19 +192,20 @@ fn expand_family_variant_data(
         }
     };
 
-    match entry.source() {
-        guicons_core::IconEntrySource::File(path) => {
-            let variant_ident = Ident::new(image_kind(path), Span::call_site());
-            let path = path.to_string_lossy().into_owned();
-            Ok(quote! { guicons::IconData::#variant_ident(include_bytes!(#path)) })
-        }
-        guicons_core::IconEntrySource::Iconify(id) => expand_iconify_literal(id),
-        guicons_core::IconEntrySource::Url(url) => expand_url_literal(url),
+    let resolved = match entry.source() {
+        guicons_core::IconEntrySource::File(path) => ResolvedSource::Image {
+            kind: image_kind(path),
+            path: path.to_string_lossy().into_owned(),
+        },
+        guicons_core::IconEntrySource::Iconify(id) => resolve_iconify_source(id)?,
+        guicons_core::IconEntrySource::Url(url) => resolve_url_source(url)?,
         guicons_core::IconEntrySource::Glyph(spec) => {
             let (font_family, codepoint) = guicons_core::parse_glyph_spec(spec, entry.key());
-            Ok(quote! { guicons::IconData::Glyph { codepoint: #codepoint, font_family: #font_family } })
+            ResolvedSource::Glyph { font_family, codepoint }
         }
-    }
+    };
+
+    Ok(emit_for_target(resolved, target))
 }
 
 fn image_kind(path: &std::path::Path) -> &'static str {
@@ -165,20 +215,73 @@ fn image_kind(path: &std::path::Path) -> &'static str {
     }
 }
 
-fn expand_url_literal(url: &str) -> Result<proc_macro2::TokenStream> {
+fn resolve_url_source(url: &str) -> Result<ResolvedSource> {
     let start = manifest_dir()?;
     let cache_path = guicons_net::url_cache_path(&start, url);
     guicons_net::ensure_cached(&cache_path, url);
-    let path = cache_path.to_string_lossy().into_owned();
-    Ok(quote! { guicons::IconData::Svg(include_bytes!(#path)) })
+    Ok(ResolvedSource::Image {
+        path: cache_path.to_string_lossy().into_owned(),
+        kind: "Svg",
+    })
 }
 
-fn expand_iconify_literal(id: &str) -> Result<proc_macro2::TokenStream> {
+fn resolve_iconify_source(id: &str) -> Result<ResolvedSource> {
     let start = manifest_dir()?;
     let cache_path = guicons_net::iconify_cache_path(&start, id);
     guicons_net::ensure_cached(&cache_path, &guicons_net::iconify_url(id));
-    let path = cache_path.to_string_lossy().into_owned();
-    Ok(quote! { guicons::IconData::Svg(include_bytes!(#path)) })
+    Ok(ResolvedSource::Image {
+        path: cache_path.to_string_lossy().into_owned(),
+        kind: "Svg",
+    })
+}
+
+fn expand_iconify_literal(id: &str, target: Target) -> Result<proc_macro2::TokenStream> {
+    let resolved = resolve_iconify_source(id)?;
+    Ok(emit_for_target(resolved, target))
+}
+
+/// Wraps a resolved source in the token stream for `target` - plain
+/// `IconData` for [`Target::Data`], or a call into `guicons::slint`/
+/// `guicons::iced`'s conversion helpers for the GUI-specific targets, which
+/// return `Option`/panic via `.expect(..)` since the conversion itself can
+/// fail (e.g. malformed PNG bytes) - that's still a compile-time-cached
+/// asset, so a panic here means the cached file is corrupt, not a user
+/// input problem.
+fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::TokenStream {
+    let data_tokens = match &resolved {
+        ResolvedSource::Image { path, kind } => {
+            let kind_ident = Ident::new(kind, Span::call_site());
+            quote! { guicons::IconData::#kind_ident(include_bytes!(#path)) }
+        }
+        ResolvedSource::Glyph { font_family, codepoint } => {
+            quote! { guicons::IconData::Glyph { codepoint: #codepoint, font_family: #font_family } }
+        }
+    };
+
+    match target {
+        Target::Data => data_tokens,
+        #[cfg(feature = "slint")]
+        Target::Slint => match resolved {
+            ResolvedSource::Image { .. } => quote! {
+                guicons::slint::image_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
+            },
+            ResolvedSource::Glyph { .. } => quote! {
+                guicons::slint::glyph_from_data(#data_tokens).expect("guicons: icon entry is not a glyph")
+            },
+        },
+        #[cfg(feature = "iced")]
+        Target::Iced => match &resolved {
+            ResolvedSource::Image { kind, .. } if *kind == "Png" => quote! {
+                guicons::iced::image_handle_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
+            },
+            ResolvedSource::Image { .. } => quote! {
+                guicons::iced::svg_handle_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
+            },
+            ResolvedSource::Glyph { .. } => quote! {
+                guicons::iced::glyph_from_data(#data_tokens).expect("guicons: icon entry is not a glyph")
+            },
+        },
+    }
 }
 
 fn parse_selector_literal(literal: &LitStr) -> Result<IconSelector> {

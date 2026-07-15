@@ -11,7 +11,7 @@ pub mod slint;
 pub mod iced;
 
 #[cfg(feature = "macros")]
-pub use guicons_macros::{icon, icon_key};
+pub use guicons_macros::{icon, icon_data, icon_key};
 
 use std::path::PathBuf;
 
