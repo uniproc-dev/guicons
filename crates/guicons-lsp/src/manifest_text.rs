@@ -70,6 +70,16 @@ fn current_line(text: &str, offset: usize) -> &str {
     &text[line_start..line_end]
 }
 
+/// Whether `offset`'s line overlaps `span` - used to make an entry's whole
+/// `key = "value"` line a go-to-definition target, not just the value
+/// token `IconEntry::span()` itself covers (so clicking on `file`, not
+/// just the string after it, still jumps to the source file).
+pub fn offset_line_overlaps(text: &str, offset: usize, span: std::ops::Range<usize>) -> bool {
+    let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = text[offset..].find('\n').map(|i| offset + i).unwrap_or(text.len());
+    span.start < line_end && span.end > line_start
+}
+
 /// One-liner + example for a manifest keyword, shown on hover.
 pub struct KeywordDoc {
     pub description: &'static str,

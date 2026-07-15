@@ -368,3 +368,42 @@ async fn hover_on_a_provider_name_shows_resolved_schema_and_origin() {
     assert!(value.contains("built-in provider, overridden"), "{value}");
     assert!(value.contains("light"), "{value}");
 }
+
+/// Clicking the `file` key itself (not just the string value after it)
+/// must jump to the asset too - the whole `key = "value"` line is the
+/// target, not only the value token `IconEntry::span()` covers.
+#[tokio::test]
+async fn goto_definition_on_the_file_keyword_itself_jumps_to_the_asset() {
+    let dir = tempdir().unwrap();
+    let asset = write(dir.path(), "docker.svg", "<svg/>");
+    let content = "[docker]\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/definition",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 1 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("definition response");
+
+    let target = result["uri"].as_str().expect("scalar location");
+    let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
+    assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(asset).unwrap());
+}

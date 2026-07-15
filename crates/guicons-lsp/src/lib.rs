@@ -2,7 +2,7 @@ mod manifest_text;
 mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
-use manifest_text::{family_header_at, include_target_at, keyword_at, provider_name_at};
+use manifest_text::{family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at};
 use position::LineIndex;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -277,7 +277,7 @@ impl LanguageServer for Backend {
         let Some(entry) = manifest
             .entries()
             .iter()
-            .find(|entry| entry.file() == path && entry.span().contains(&offset))
+            .find(|entry| entry.file() == path && offset_line_overlaps(&text, offset, entry.span()))
         else {
             return Ok(None);
         };
