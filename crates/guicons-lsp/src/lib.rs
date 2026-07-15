@@ -2,7 +2,7 @@ mod manifest_text;
 mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
-use manifest_text::{family_header_at, include_target_at};
+use manifest_text::{family_header_at, include_target_at, keyword_at, provider_name_at};
 use position::LineIndex;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -171,7 +171,38 @@ impl LanguageServer for Backend {
         let index = LineIndex::new(&text);
         let Some(offset) = index.offset(&text, position) else { return Ok(None) };
 
+        if let Some((keyword, doc)) = keyword_at(&text, offset) {
+            let value = format!("**{keyword}**\n\n{}\n\n```toml\n{}\n```", doc.description, doc.example);
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
+                range: None,
+            }));
+        }
+
         let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
+
+        if let Some(name) = provider_name_at(&text, offset) {
+            if let Some(schema) = manifest.provider(&name) {
+                let is_builtin = guicons_core::builtin_provider_names().any(|builtin| builtin == name);
+                let overridden = text.contains(&format!("[providers.{name}.override]"));
+                let origin = match (is_builtin, overridden) {
+                    (true, true) => "built-in provider, overridden in this file",
+                    (true, false) => "built-in provider",
+                    (false, _) => "custom provider",
+                };
+                let variants = if schema.variants.is_empty() { "(none)".to_string() } else { schema.variants.join(", ") };
+                let sizes = if schema.sizes.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    schema.sizes.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
+                };
+                let value = format!("**{name}** - {origin}\n\n- variants: {variants}\n- sizes: {sizes}");
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
+                    range: None,
+                }));
+            }
+        }
 
         if let Some((family, size)) = family_header_at(&text, offset) {
             let variants: Vec<_> = manifest

@@ -297,3 +297,74 @@ async fn goto_definition_on_an_include_target_jumps_to_the_included_file() {
     let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
     assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(nav).unwrap());
 }
+
+#[tokio::test]
+async fn hover_on_a_keyword_shows_docs_and_example() {
+    let dir = tempdir().unwrap();
+    let content = "[docker]\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 1 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("Local file path"), "{value}");
+    assert!(value.contains("```toml"), "{value}");
+}
+
+#[tokio::test]
+async fn hover_on_a_provider_name_shows_resolved_schema_and_origin() {
+    let dir = tempdir().unwrap();
+    let content = "[providers.fluent.override]\nvariants = [\"regular\", \"filled\", \"light\"]\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 12 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("fluent"), "{value}");
+    assert!(value.contains("built-in provider, overridden"), "{value}");
+    assert!(value.contains("light"), "{value}");
+}
