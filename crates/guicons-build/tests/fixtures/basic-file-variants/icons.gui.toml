@@ -7,8 +7,8 @@ variants = ["thin", "light", "bold", "fill", "duotone"]
 [providers.bootstrap]
 variants = ["fill"]
 
-[include]
-extra = "icons/extra.gui.toml"
+[link]
+includes = ["icons/extra.gui.toml"]
 
 [settings]
 variants.filled = { file = "settings-filled.svg" }

@@ -7,10 +7,10 @@ expression: "summarize_errors(dir.path(), &errors)"
         file: "icons.gui.toml",
         span: Some(
             (
-                33,
-                34,
+                36,
+                40,
             ),
         ),
-        message: "`include.nav` must be a string",
+        message: "`link.includes` must be an array of strings",
     },
 ]

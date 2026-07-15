@@ -143,13 +143,13 @@ impl IconEntry {
     /// variant's inline table, or the flat entry's table) - for editor
     /// tooling that needs to map a cursor position back to an entry.
     /// Only meaningful together with [`Self::file`] - spans from
-    /// different files (e.g. across `[include]`) can overlap numerically.
+    /// different files (e.g. across `[link]`) can overlap numerically.
     pub fn span(&self) -> Range<usize> {
         self.span.clone()
     }
 
     /// The specific manifest file this entry was declared in - the root
-    /// manifest, or one of its `[include]`d files.
+    /// manifest, or one of its `[link]`d files.
     pub fn file(&self) -> &Path {
         &self.file
     }

@@ -1,4 +1,4 @@
-//! Entry point for loading a manifest file (and any files it `[include]`s)
+//! Entry point for loading a manifest file (and any files it `[link]`ed manifests)
 //! from disk.
 //!
 //! This is the only module that touches the filesystem or knows about
@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_span::value::{Table, ValueInner};
 
-/// Parse a manifest (and any files it `[include]`s), collecting every
+/// Parse a manifest (and any files it `[link]`ed manifests), collecting every
 /// problem found instead of stopping at the first one.
 ///
 /// Always returns a best-effort [`IconManifest`]: entries that failed to
@@ -31,7 +31,7 @@ pub fn load_icon_manifest(manifest_path: &Path) -> (IconManifest, Vec<ManifestEr
 
 /// Like [`load_icon_manifest`], but parses `content` for the root document
 /// instead of reading `manifest_path` from disk - for editor tooling that
-/// wants diagnostics against unsaved buffer content. Any `[include]`d files
+/// wants diagnostics against unsaved buffer content. Any `[link]`d files
 /// are still read from disk as usual (they aren't the document being edited).
 pub fn load_icon_manifest_from_str(
     manifest_path: &Path,
@@ -179,7 +179,7 @@ fn load_icon_manifest_inner(
     let mut providers = HashMap::new();
     collect_includes(&root_table, &manifest_path, seen, source_paths, errors, &mut entries, &mut providers);
     // A file's own `[providers.*]` take precedence over anything an
-    // `[include]`d file declared under the same name.
+    // `[link]`d file declared under the same name.
     providers.extend(own_providers);
 
     let own_entries_start = entries.len();
@@ -198,7 +198,7 @@ fn load_icon_manifest_inner(
         );
     }
     // `collect_entries` doesn't know which file it's parsing (that's the
-    // whole point of the parse/load split) - entries from `[include]`d
+    // whole point of the parse/load split) - entries from `[link]`d
     // files already have `file` set correctly by their own recursive
     // `load_icon_manifest_inner` call, so only stamp the ones this level
     // just added for its own root table.
@@ -227,26 +227,38 @@ fn collect_includes(
     entries_acc: &mut Vec<IconEntry>,
     providers_acc: &mut HashMap<String, ProviderSchema>,
 ) {
-    let Some(include_value) = table.get("include") else {
+    let Some(link_value) = table.get("link") else {
         return;
     };
-    let Some(include_table) = include_value.as_table() else {
+    let Some(link_table) = link_value.as_table() else {
         errors.push(ManifestError {
             file: manifest_path.to_path_buf(),
-            span: Some(include_value.span.into()),
-            message: "`[include]` must be a table".to_string(),
+            span: Some(link_value.span.into()),
+            message: "`[link]` must be a table".to_string(),
+        });
+        return;
+    };
+
+    let Some(includes_value) = link_table.get("includes") else {
+        return;
+    };
+    let Some(includes_array) = includes_value.as_array() else {
+        errors.push(ManifestError {
+            file: manifest_path.to_path_buf(),
+            span: Some(includes_value.span.into()),
+            message: "`link.includes` must be an array of strings".to_string(),
         });
         return;
     };
 
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
-    for (name, value) in include_table.iter() {
+    for value in includes_array {
         let Some(path) = value.as_str() else {
             errors.push(ManifestError {
                 file: manifest_path.to_path_buf(),
                 span: Some(value.span.into()),
-                message: format!("`include.{name}` must be a string"),
+                message: "`link.includes` entries must be strings".to_string(),
             });
             continue;
         };

@@ -96,8 +96,8 @@ fn include_merges_child_manifest_entries() {
         dir.path(),
         "icons.gui.toml",
         r#"
-        [include]
-        nav = "icons/nav.gui.toml"
+        [link]
+        includes = ["icons/nav.gui.toml"]
 
         [logo]
         file = "logo.svg"
@@ -131,8 +131,8 @@ fn include_merges_child_manifest_providers() {
         variants = ["regular", "filled"]
         sizes = [24]
 
-        [include]
-        nav = "icons/nav.gui.toml"
+        [link]
+        includes = ["icons/nav.gui.toml"]
         "#,
     );
 
@@ -161,8 +161,8 @@ fn a_files_own_provider_wins_over_an_included_ones_same_name() {
         [providers.acme]
         variants = ["from-root"]
 
-        [include]
-        nav = "icons/nav.gui.toml"
+        [link]
+        includes = ["icons/nav.gui.toml"]
         "#,
     );
 
@@ -178,16 +178,16 @@ fn cyclic_include_is_reported_and_does_not_hang() {
         dir.path(),
         "b.gui.toml",
         r#"
-        [include]
-        a = "a.gui.toml"
+        [link]
+        includes = ["a.gui.toml"]
         "#,
     );
     let a = write(
         dir.path(),
         "a.gui.toml",
         r#"
-        [include]
-        b = "b.gui.toml"
+        [link]
+        includes = ["b.gui.toml"]
         "#,
     );
 
@@ -196,13 +196,13 @@ fn cyclic_include_is_reported_and_does_not_hang() {
 }
 
 #[test]
-fn include_section_must_be_a_table() {
+fn link_section_must_be_a_table() {
     let dir = tempdir().unwrap();
     let root = write(
         dir.path(),
         "icons.gui.toml",
         r#"
-        include = "nope"
+        link = "nope"
         "#,
     );
     let (_, errors) = load_icon_manifest(&root);
@@ -210,14 +210,29 @@ fn include_section_must_be_a_table() {
 }
 
 #[test]
-fn include_target_must_be_a_string() {
+fn link_includes_must_be_an_array() {
     let dir = tempdir().unwrap();
     let root = write(
         dir.path(),
         "icons.gui.toml",
         r#"
-        [include]
-        nav = 5
+        [link]
+        includes = "nope"
+        "#,
+    );
+    let (_, errors) = load_icon_manifest(&root);
+    insta::assert_debug_snapshot!(summarize_errors(dir.path(), &errors));
+}
+
+#[test]
+fn link_includes_entries_must_be_strings() {
+    let dir = tempdir().unwrap();
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [link]
+        includes = [5]
         "#,
     );
     let (_, errors) = load_icon_manifest(&root);
@@ -248,8 +263,8 @@ fn entries_are_sorted_by_key_across_includes() {
         dir.path(),
         "icons.gui.toml",
         r#"
-        [include]
-        nav = "icons/nav.gui.toml"
+        [link]
+        includes = ["icons/nav.gui.toml"]
 
         [zebra]
         file = "z.svg"
@@ -305,8 +320,8 @@ fn load_from_str_still_resolves_includes_from_disk() {
     let root_path = dir.path().join("icons.gui.toml");
 
     let unsaved_content = r#"
-    [include]
-    nav = "icons/nav.gui.toml"
+    [link]
+    includes = ["icons/nav.gui.toml"]
 
     [docker]
     file = "docker.svg"
@@ -332,8 +347,8 @@ fn entries_carry_the_file_they_were_declared_in_even_across_includes() {
         dir.path(),
         "icons.gui.toml",
         r#"
-        [include]
-        nav = "icons/nav.gui.toml"
+        [link]
+        includes = ["icons/nav.gui.toml"]
 
         [docker]
         file = "docker.svg"

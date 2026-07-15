@@ -1,0 +1,16 @@
+---
+source: crates/guicons-core/tests/load.rs
+expression: "summarize_errors(dir.path(), &errors)"
+---
+[
+    ErrorSummary {
+        file: "icons.gui.toml",
+        span: Some(
+            (
+                36,
+                37,
+            ),
+        ),
+        message: "`link.includes` entries must be strings",
+    },
+]

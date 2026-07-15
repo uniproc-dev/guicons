@@ -2,7 +2,7 @@
 //!
 //! Parsing is split in two: [`parse`] turns one already-read `toml_span`
 //! document into entries, while [`load`] is the entry point that reads
-//! files from disk and resolves `[include]`.
+//! files from disk and resolves `[link]`.
 
 mod diagnostics;
 mod load;

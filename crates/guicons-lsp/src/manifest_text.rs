@@ -1,17 +1,17 @@
 //! Lightweight text-based lookups the manifest model doesn't cover - table
 //! header lines (which don't have their own span, unlike entries) and
-//! `[include]` targets (resolved into `IconManifest` and then discarded).
-//! Heuristic on purpose: good enough for hover/go-to-definition, not a
-//! second parser.
+//! `[link] includes = [...]` targets (resolved into `IconManifest` and then
+//! discarded). Heuristic on purpose: good enough for hover/go-to-definition,
+//! not a second parser.
 
 /// If the line at `offset` is a `[family]`/`[family.24]` table header (not
-/// `[include]`/`[defaults]`/`[providers.*]`), returns the family name and
+/// `[link]`/`[defaults]`/`[providers.*]`), returns the family name and
 /// optional size the same way the manifest parser would derive them from
 /// that path.
 pub fn family_header_at(text: &str, offset: usize) -> Option<(String, Option<u16>)> {
     let line = current_line(text, offset).trim();
     let inner = line.strip_prefix('[')?.strip_suffix(']')?;
-    if inner.is_empty() || inner == "include" || inner == "defaults" || inner.starts_with("providers") {
+    if inner.is_empty() || inner == "link" || inner == "defaults" || inner.starts_with("providers") {
         return None;
     }
 
@@ -29,22 +29,33 @@ pub fn family_header_at(text: &str, offset: usize) -> Option<(String, Option<u16
     Some((segments.join("-"), size))
 }
 
-/// If `offset` is on a `key = "value"` line inside the `[include]` table,
-/// returns the (unresolved) path string.
+/// If `offset` lands on one of the quoted strings inside `[link]`'s
+/// `includes = [...]` array, returns that (unresolved) path string.
 pub fn include_target_at(text: &str, offset: usize) -> Option<String> {
-    let (start, end) = include_section_range(text)?;
+    let (start, end) = link_section_range(text)?;
     if offset < start || offset >= end {
         return None;
     }
+    let line_start = line_start_of(text, offset);
     let line = current_line(text, offset);
-    let (_, value) = line.split_once('=')?;
-    let value = value.trim().strip_prefix('"')?.strip_suffix('"')?;
-    Some(value.to_string())
+    let col = offset - line_start;
+
+    let mut search = 0;
+    while let Some(rel_start) = line[search..].find('"') {
+        let quote_start = search + rel_start;
+        let rel_end = line[quote_start + 1..].find('"')?;
+        let quote_end = quote_start + 1 + rel_end;
+        if col >= quote_start && col <= quote_end + 1 {
+            return Some(line[quote_start + 1..quote_end].to_string());
+        }
+        search = quote_end + 1;
+    }
+    None
 }
 
-/// Byte range of the `[include]` table's body (after its own header line,
-/// up to the next table header or end of file).
-fn include_section_range(text: &str) -> Option<(usize, usize)> {
+/// Byte range of the `[link]` table's body (after its own header line, up
+/// to the next table header or end of file).
+fn link_section_range(text: &str) -> Option<(usize, usize)> {
     let mut pos = 0usize;
     let mut body_start = None;
     for line in text.split_inclusive('\n') {
@@ -57,7 +68,7 @@ fn include_section_range(text: &str) -> Option<(usize, usize)> {
             }
             continue;
         }
-        if trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some("include") {
+        if trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some("link") {
             body_start = Some(pos);
         }
     }
@@ -103,9 +114,13 @@ const KEYWORD_DOCS: &[(&str, KeywordDoc)] = &[
         description: "Default size: feeds the synthesized `iconify` id, and is inherited by entries without their own `[family.N]` numeric segment.",
         example: "size = 24",
     }),
-    ("include", KeywordDoc {
-        description: "Other manifest files to merge in: `name = \"path/to/file.gui.toml\"`, resolved relative to this file.",
-        example: "[include]\nnav = \"icons/nav.gui.toml\"",
+    ("link", KeywordDoc {
+        description: "Table declaring other manifest files to merge into this one.",
+        example: "[link]\nincludes = [\"icons/nav.gui.toml\"]",
+    }),
+    ("includes", KeywordDoc {
+        description: "Array of other manifest file paths to merge in, resolved relative to this file.",
+        example: "[link]\nincludes = [\"icons/nav.gui.toml\", \"icons/toolbar.gui.toml\"]",
     }),
     ("providers", KeywordDoc {
         description: "Provider schemas (`variants`/`sizes`) used to reverse-parse a pasted iconify id into family/size/variant.",

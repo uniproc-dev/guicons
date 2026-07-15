@@ -1,6 +1,6 @@
 //! Turns one already-parsed `toml_span` document into `IconEntry` values.
 //!
-//! Nothing here touches the filesystem or knows about `[include]` — that's
+//! Nothing here touches the filesystem or knows about `[link]` — that's
 //! [`crate::load`]'s job. This module only walks the table tree produced by
 //! `toml_span::parse` and validates/extracts entries from it.
 
@@ -22,7 +22,7 @@ const ENTRY_KEYS: &[&str] = &[
     "dynamic",
     "root",
 ];
-pub(crate) const RESERVED_TOP_LEVEL: &[&str] = &["defaults", "include", "providers"];
+pub(crate) const RESERVED_TOP_LEVEL: &[&str] = &["defaults", "link", "providers"];
 
 fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     match value.take() {

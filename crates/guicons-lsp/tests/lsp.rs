@@ -104,7 +104,7 @@ async fn hover_reports_entry_details_at_cursor() {
     assert!(value.contains("docker"), "{value}");
 }
 
-/// Hovering the *including* document's own entry, with an `[include]`
+/// Hovering the *including* document's own entry, with a `[link]`
 /// present, must report that entry - not one pulled in from the included
 /// file. (The deterministic version of this check, exercising
 /// `IconEntry::file()` directly against exact byte spans, lives in
@@ -113,7 +113,7 @@ async fn hover_reports_entry_details_at_cursor() {
 async fn hover_reports_the_root_documents_own_entry_when_an_include_is_present() {
     let dir = tempdir().unwrap();
     write(dir.path(), "nav.gui.toml", "[back]\nfile = \"back.svg\"\n");
-    let root_content = "[include]\nnav = \"nav.gui.toml\"\n\n[docker]\nfile = \"docker.svg\"\n";
+    let root_content = "[link]\nincludes = [\"nav.gui.toml\"]\n\n[docker]\nfile = \"docker.svg\"\n";
     let path = write(dir.path(), "icons.gui.toml", root_content);
     let uri = file_uri(&path);
 
@@ -266,7 +266,7 @@ async fn goto_definition_on_an_entry_jumps_to_its_asset_file() {
 async fn goto_definition_on_an_include_target_jumps_to_the_included_file() {
     let dir = tempdir().unwrap();
     let nav = write(dir.path(), "nav.gui.toml", "[back]\nfile = \"back.svg\"\n");
-    let content = "[include]\nnav = \"nav.gui.toml\"\n";
+    let content = "[link]\nincludes = [\"nav.gui.toml\"]\n";
     let path = write(dir.path(), "icons.gui.toml", content);
     let uri = file_uri(&path);
 
@@ -286,7 +286,7 @@ async fn goto_definition_on_an_include_target_jumps_to_the_included_file() {
         "textDocument/definition",
         Some(json!({
             "textDocument": { "uri": uri },
-            "position": { "line": 1, "character": 10 }
+            "position": { "line": 1, "character": 14 }
         })),
         Some(2),
     )

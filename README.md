@@ -20,7 +20,7 @@ crates and the `iconify` crate.
 ## Features
 
 - **One manifest, `icons.gui.toml`**: family/variant/size axes,
-  `[include]` to split across files, `[defaults]` for shared root/
+  `[link] includes = [...]` to split across files, `[defaults]` for shared root/
   provider/size, `[providers.<name>]` schemas (built-in for Fluent,
   Phosphor, Material Symbols, Heroicons, Bootstrap Icons, Tabler, with
   per-field `.override`).

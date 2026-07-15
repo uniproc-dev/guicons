@@ -7,10 +7,10 @@ expression: "summarize_errors(dir.path(), &errors)"
         file: "icons.gui.toml",
         span: Some(
             (
-                20,
-                24,
+                17,
+                21,
             ),
         ),
-        message: "`[include]` must be a table",
+        message: "`[link]` must be a table",
     },
 ]
