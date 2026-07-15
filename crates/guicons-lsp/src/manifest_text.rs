@@ -224,6 +224,21 @@ fn line_start_of(text: &str, offset: usize) -> usize {
     text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0)
 }
 
+/// Byte range (absolute) of the word-forming characters immediately
+/// preceding `offset` on its line - the partial key already typed.
+/// Completion uses this as the exact replacement range instead of letting
+/// the client guess a word boundary, which can otherwise reach back into
+/// the previous line's trailing newline when `offset` is at column 0.
+pub fn word_prefix_span(text: &str, offset: usize) -> std::ops::Range<usize> {
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '-' || c == '_';
+    let line_start = line_start_of(text, offset);
+    let start = text[line_start..offset]
+        .rfind(|c: char| !is_word_char(c))
+        .map(|i| line_start + i + 1)
+        .unwrap_or(line_start);
+    start..offset
+}
+
 /// Extracts the identifier-like word touching column `col` in `line`
 /// (`-`/`_` included, so `windows-ico` is one word), plus its start/end
 /// columns.

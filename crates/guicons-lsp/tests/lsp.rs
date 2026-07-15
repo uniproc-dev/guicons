@@ -516,3 +516,49 @@ async fn completion_inside_link_section_suggests_includes() {
     let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
     assert_eq!(labels, vec!["includes"]);
 }
+
+/// Completion must keep suggesting fields after the user has typed part
+/// of the key (not only on a completely empty line), and the replacement
+/// range must cover exactly the typed prefix - not reach back into the
+/// previous line, which would delete its trailing newline on accept.
+#[tokio::test]
+async fn completion_after_a_partial_field_prefix_still_suggests_and_has_a_safe_range() {
+    let dir = tempdir().unwrap();
+    let content = "[docker]\nf\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 1 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"file"), "{labels:?}");
+
+    let file_item = items.iter().find(|item| item["label"] == "file").unwrap();
+    let range = &file_item["textEdit"]["range"];
+    assert_eq!(range["start"]["line"], 1);
+    assert_eq!(range["start"]["character"], 0);
+    assert_eq!(range["end"]["line"], 1);
+    assert_eq!(range["end"]["character"], 1);
+}

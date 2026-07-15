@@ -44,7 +44,7 @@ impl Diagnostics<'_> {
     }
 
     pub(crate) fn push_toml_error(&mut self, error: toml_span::Error) {
-        self.error(Some(error.span.into()), error.to_string());
+        self.error(Some(error.span.into()), format_toml_error(&error));
     }
 
     pub(crate) fn push_deser_error(&mut self, error: toml_span::DeserError) {
@@ -52,4 +52,17 @@ impl Diagnostics<'_> {
             self.push_toml_error(error);
         }
     }
+}
+
+/// `toml_span::Error`'s own `Display` embeds `{:?}`-formatted spans
+/// (`Span { start: .., end: .. }`) straight into a couple of its
+/// messages, unreadable to a human reading a diagnostic - reformat those
+/// specific cases; everything else already reads fine as-is.
+fn format_toml_error(error: &toml_span::Error) -> String {
+    if let toml_span::ErrorKind::UnexpectedKeys { keys, expected } = &error.kind {
+        let keys = keys.iter().map(|(name, _)| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+        let expected = expected.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ");
+        return format!("unexpected field(s): {keys} (expected one of: {expected})");
+    }
+    error.to_string()
 }

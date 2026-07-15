@@ -3,7 +3,8 @@ mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
 use manifest_text::{
-    family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at, section_kind_at, SectionKind,
+    family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at, section_kind_at,
+    word_prefix_span, SectionKind,
 };
 use position::LineIndex;
 use std::collections::BTreeSet;
@@ -304,9 +305,20 @@ impl LanguageServer for Backend {
         let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line_prefix = text[line_start..offset].trim_start();
 
+        // An explicit replacement range, instead of leaving the client to
+        // guess a word boundary - which can otherwise reach back across
+        // the previous line's newline when `offset` is at column 0.
+        let replace_range = index.range(&text, word_prefix_span(&text, offset));
+        let make_item = |name: String, detail: &'static str| CompletionItem {
+            label: name.clone(),
+            detail: Some(detail.to_string()),
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range: replace_range, new_text: name })),
+            ..Default::default()
+        };
+
         if line_prefix.starts_with('[') && line_prefix.contains("providers.") {
             let items = guicons_core::builtin_provider_names()
-                .map(|name| CompletionItem::new_simple(name.to_string(), "built-in provider".to_string()))
+                .map(|name| make_item(name.to_string(), "built-in provider"))
                 .collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }
@@ -319,14 +331,14 @@ impl LanguageServer for Backend {
                     variants.extend(schema.variants.iter().cloned());
                 }
             }
-            let items = variants
-                .into_iter()
-                .map(|variant| CompletionItem::new_simple(variant, "variant".to_string()))
-                .collect();
+            let items = variants.into_iter().map(|variant| make_item(variant, "variant")).collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        if line_prefix.is_empty() {
+        // A bare key being typed (possibly partially) at the start of a
+        // line - not yet past `=`, `.`, or `[`.
+        let is_bare_key_prefix = line_prefix.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_');
+        if is_bare_key_prefix {
             let fields: &[&str] = match section_kind_at(&text, offset) {
                 SectionKind::TopLevel => &["defaults", "link", "providers"],
                 SectionKind::Defaults => &["root", "provider", "size"],
@@ -334,10 +346,7 @@ impl LanguageServer for Backend {
                 SectionKind::Provider => &["variants", "sizes"],
                 SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "variants"],
             };
-            let items = fields
-                .iter()
-                .map(|name| CompletionItem::new_simple(name.to_string(), "field".to_string()))
-                .collect();
+            let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
