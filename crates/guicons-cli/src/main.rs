@@ -25,6 +25,11 @@ enum Command {
         #[arg(long, default_value = "icons.gui.toml")]
         manifest: PathBuf,
     },
+    /// Validate the manifest, reporting every error with a source snippet.
+    Check {
+        #[arg(long, default_value = "icons.gui.toml")]
+        manifest: PathBuf,
+    },
     /// Add an icon (iconify id or file path) to the manifest.
     Add {
         /// `set:name` iconify id, or a path to a local file.
@@ -46,15 +51,42 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // Force the graphical (boxed, unicode, source-snippet) diagnostic
+    // renderer regardless of TTY detection - `check`'s whole point is a
+    // readable report, not a fallback that only appears in a real
+    // terminal. Respects `NO_COLOR` for color, not for the layout itself.
+    let _ = miette::set_hook(Box::new(|_| {
+        Box::new(
+            miette::MietteHandlerOpts::new()
+                .force_graphical(true)
+                .color(std::env::var_os("NO_COLOR").is_none())
+                .build(),
+        )
+    }));
+
     let cli = Cli::parse();
 
     match cli.command {
         Command::Fetch { manifest, force } => run_fetch(&manifest, force),
         Command::Update { manifest } => run_fetch(&manifest, true),
+        Command::Check { manifest } => run_check(&manifest),
         Command::Add { source, name, variants, size, manifest, force } => {
             run_add(&manifest, &source, name.as_deref(), &variants, size, force)
         }
     }
+}
+
+fn run_check(manifest: &PathBuf) -> ExitCode {
+    let (entry_count, reports) = guicons_cli::check(manifest);
+    if reports.is_empty() {
+        println!("\u{2713} {} - {entry_count} icon{} OK", manifest.display(), if entry_count == 1 { "" } else { "s" });
+        return ExitCode::SUCCESS;
+    }
+    for report in &reports {
+        eprintln!("{report:?}");
+    }
+    eprintln!("{} error{} found", reports.len(), if reports.len() == 1 { "" } else { "s" });
+    ExitCode::FAILURE
 }
 
 fn run_add(
