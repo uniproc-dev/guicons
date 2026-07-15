@@ -19,3 +19,9 @@ file = "docker.svg"
 
 [spinner]
 glyph = "FixtureIconFont:U+E001"
+
+[home]
+iconify = "mdi:home"
+
+[house]
+iconify = "ph:house-bold"

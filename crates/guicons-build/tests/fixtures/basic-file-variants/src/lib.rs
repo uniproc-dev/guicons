@@ -8,7 +8,7 @@ mod tests {
 
     #[test]
     fn generated_registry_exposes_keys_families_and_variants() {
-        assert_eq!(icons::ALL_KEYS.len(), 9);
+        assert_eq!(icons::ALL_KEYS.len(), 11);
 
         let key = icons::key_from_dynamic_family_variant("settings", None, Some("filled")).unwrap();
         assert_eq!(icons::name_for_key(key), Some("settings-filled"));
@@ -43,6 +43,25 @@ mod tests {
                 assert!(bytes.starts_with(b"<svg"));
                 assert!(String::from_utf8_lossy(bytes).contains("circle"));
             }
+            other => panic!("expected svg icon data, got {other:?}"),
+        }
+    }
+
+    /// `[home]`/`[house]` use real iconify.design ids (`mdi:home`,
+    /// `ph:house-bold` - `ph` is a real, builtin-schema provider), fetched
+    /// once into the offline cache under `.cache/guicons/` so this test
+    /// doesn't need network access.
+    #[test]
+    fn manifest_entries_resolve_real_iconify_ids_from_the_offline_cache() {
+        match icons::data_for(icons::keys::HOME).unwrap() {
+            guicons::IconData::Svg(bytes) => {
+                assert!(bytes.starts_with(b"<svg"));
+                assert!(String::from_utf8_lossy(bytes).contains("M10 20v-6h4v6h5v-8h3L12 3L2 12h3v8z"));
+            }
+            other => panic!("expected svg icon data, got {other:?}"),
+        }
+        match icons::data_for(icons::keys::HOUSE).unwrap() {
+            guicons::IconData::Svg(bytes) => assert!(bytes.starts_with(b"<svg")),
             other => panic!("expected svg icon data, got {other:?}"),
         }
     }
