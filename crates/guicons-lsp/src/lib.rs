@@ -3,8 +3,8 @@ mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
 use manifest_text::{
-    family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at, section_kind_at,
-    word_prefix_span, SectionKind,
+    defaults_root, family_header_at, include_target_at, keyword_at, offset_line_overlaps, path_field_at,
+    provider_name_at, section_kind_at, word_prefix_span, PathFieldKind, SectionKind,
 };
 use position::LineIndex;
 use std::collections::BTreeSet;
@@ -45,6 +45,101 @@ fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String 
     }
 }
 
+/// `file`/`windows-ico` targets that don't exist on disk - not caught by
+/// `guicons_core` at all (it only validates manifest *shape*), so this is
+/// entirely an editor-tooling-side check.
+fn missing_file_diagnostics(text: &str, path: &Path, manifest: &IconManifest, index: &LineIndex) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for entry in manifest.entries() {
+        if entry.file() != path {
+            continue;
+        }
+        if let IconEntrySource::File(target) = entry.source() {
+            diagnostics.extend(missing_file_diagnostic(target, "file", entry.span(), text, index, manifest));
+        }
+        if let Some(ico) = entry.windows_ico() {
+            diagnostics.extend(missing_file_diagnostic(ico, "windows-ico", entry.span(), text, index, manifest));
+        }
+    }
+    diagnostics
+}
+
+fn missing_file_diagnostic(
+    target: &Path,
+    field: &str,
+    span: std::ops::Range<usize>,
+    text: &str,
+    index: &LineIndex,
+    manifest: &IconManifest,
+) -> Option<Diagnostic> {
+    if target.exists() {
+        return None;
+    }
+    let mut message = format!("`{field}` not found: `{}`", display_path(target, manifest));
+    if let Some(suggestion) = closest_file_name(target) {
+        message.push_str(&format!(" - did you mean `{suggestion}`?"));
+    }
+    Some(Diagnostic {
+        range: index.range(text, span),
+        severity: Some(DiagnosticSeverity::ERROR),
+        message,
+        source: Some("guicons".to_string()),
+        ..Default::default()
+    })
+}
+
+/// Closest sibling file by name (Levenshtein distance), for a "did you
+/// mean" suggestion - `None` if nothing in the directory is plausibly a
+/// typo of `target`'s name (rather than just unrelated).
+fn closest_file_name(target: &Path) -> Option<String> {
+    let dir = target.parent()?;
+    let target_name = target.file_name()?.to_string_lossy().to_string();
+    let mut best: Option<(usize, String)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let distance = levenshtein(&target_name, &name);
+        if best.as_ref().is_none_or(|(best_distance, _)| distance < *best_distance) {
+            best = Some((distance, name));
+        }
+    }
+    let (distance, name) = best?;
+    (distance <= target_name.len().div_ceil(2).max(2)).then_some(name)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
+/// Where `file`/`windows-ico` completion should look for candidates:
+/// `defaults.root` (if declared) resolved against the workspace root,
+/// same as `guicons_core` resolves it - falling back to the manifest's
+/// own directory.
+fn resolve_file_base_dir(manifest_path: &Path, text: &str) -> PathBuf {
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let Some(root) = defaults_root(text) else {
+        return manifest_dir.to_path_buf();
+    };
+    let root_path = Path::new(&root);
+    if root_path.is_absolute() {
+        return root_path.to_path_buf();
+    }
+    guicons_core::find_workspace_root_from(manifest_path)
+        .map(|workspace_root| workspace_root.join(root_path))
+        .unwrap_or_else(|| manifest_dir.join(root_path))
+}
+
 pub struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
@@ -76,9 +171,9 @@ impl Backend {
         let Some(path) = Self::path_for_uri(&uri) else { return };
         let Some(text) = self.document_text(&uri).await else { return };
 
-        let (_, errors) = guicons_core::load_icon_manifest_from_str(&path, &text);
+        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, &text);
         let index = LineIndex::new(&text);
-        let diagnostics = errors
+        let mut diagnostics: Vec<Diagnostic> = errors
             .iter()
             .filter(|error| error.file == path)
             .map(|error| Diagnostic {
@@ -92,6 +187,7 @@ impl Backend {
                 ..Default::default()
             })
             .collect();
+        diagnostics.extend(missing_file_diagnostics(&text, &path, &manifest, &index));
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
@@ -323,6 +419,38 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
+        if let Some((kind, quote_span, typed)) = path_field_at(&text, offset) {
+            let base_dir = match kind {
+                PathFieldKind::Includes => path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
+                PathFieldKind::File => resolve_file_base_dir(&path, &text),
+            };
+            let allowed_extensions: &[&str] = match kind {
+                PathFieldKind::Includes => &["toml"],
+                PathFieldKind::File => &["svg", "png"],
+            };
+            let range = index.range(&text, quote_span);
+            let mut items = Vec::new();
+            if let Ok(read_dir) = std::fs::read_dir(&base_dir) {
+                for dir_entry in read_dir.flatten() {
+                    let name = dir_entry.file_name().to_string_lossy().into_owned();
+                    if !name.starts_with(&typed) {
+                        continue;
+                    }
+                    let is_dir = dir_entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+                    if !is_dir && !allowed_extensions.iter().any(|ext| name.ends_with(&format!(".{ext}"))) {
+                        continue;
+                    }
+                    items.push(CompletionItem {
+                        label: name.clone(),
+                        kind: Some(if is_dir { CompletionItemKind::FOLDER } else { CompletionItemKind::FILE }),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: name })),
+                        ..Default::default()
+                    });
+                }
+            }
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
         if line_prefix.starts_with("variants.") {
             let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
             let mut variants = BTreeSet::new();
@@ -351,5 +479,56 @@ impl LanguageServer for Backend {
         }
 
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn missing_file_gets_a_did_you_mean_suggestion_for_a_close_typo() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("docker.svg"), "<svg/>").unwrap();
+
+        let target = dir.path().join("dokcer.svg");
+        let suggestion = closest_file_name(&target).expect("a suggestion");
+        assert_eq!(suggestion, "docker.svg");
+    }
+
+    #[test]
+    fn missing_file_gets_no_suggestion_when_nothing_is_close() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("completely-unrelated-name.png"), "").unwrap();
+
+        let target = dir.path().join("x.svg");
+        assert_eq!(closest_file_name(&target), None);
+    }
+
+    #[test]
+    fn missing_file_diagnostics_reports_entries_whose_file_does_not_exist() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("docker.svg"), "<svg/>").unwrap();
+        let content = "[docker]\nfile = \"docker.svg\"\n\n[missing]\nfile = \"dokcer.svg\"\n";
+        let path = dir.path().join("icons.gui.toml");
+        std::fs::write(&path, content).unwrap();
+
+        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, content);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let index = LineIndex::new(content);
+        let diagnostics = missing_file_diagnostics(content, &guicons_core::canonicalize_or_self(&path), &manifest, &index);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("dokcer.svg"), "{}", diagnostics[0].message);
+        assert!(diagnostics[0].message.contains("did you mean `docker.svg`"), "{}", diagnostics[0].message);
+    }
+
+    #[test]
+    fn levenshtein_matches_known_distances() {
+        assert_eq!(levenshtein("docker", "docker"), 0);
+        assert_eq!(levenshtein("docker", "dokcer"), 2);
+        assert_eq!(levenshtein("", "abc"), 3);
     }
 }

@@ -562,3 +562,91 @@ async fn completion_after_a_partial_field_prefix_still_suggests_and_has_a_safe_r
     assert_eq!(range["end"]["line"], 1);
     assert_eq!(range["end"]["character"], 1);
 }
+
+#[tokio::test]
+async fn completion_inside_a_file_value_lists_matching_assets() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "settings-filled.svg", "<svg/>");
+    write(dir.path(), "settings-regular.svg", "<svg/>");
+    write(dir.path(), "readme.txt", "not an icon");
+    let content = "[settings]\nfile = \"set\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    // `file = "set"` - the opening quote is at column 7, "set" spans
+    // columns 8-10, so right after "set" (before the closing quote) is
+    // column 11.
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 11 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"settings-filled.svg"), "{labels:?}");
+    assert!(labels.contains(&"settings-regular.svg"), "{labels:?}");
+    assert!(!labels.contains(&"readme.txt"), "{labels:?}");
+
+    let item = items.iter().find(|item| item["label"] == "settings-filled.svg").unwrap();
+    let range = &item["textEdit"]["range"];
+    assert_eq!(range["start"]["line"], 1);
+    assert_eq!(range["start"]["character"], 8);
+    assert_eq!(range["end"]["line"], 1);
+    assert_eq!(range["end"]["character"], 11);
+}
+
+#[tokio::test]
+async fn completion_inside_link_includes_lists_matching_manifests() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "nav.gui.toml", "[back]\nfile = \"back.svg\"\n");
+    let content = "[link]\nincludes = [\"na\"]\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    // Cursor right after "na" inside the quotes.
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 15 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"nav.gui.toml"), "{labels:?}");
+}
+

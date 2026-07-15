@@ -63,7 +63,7 @@ pub fn section_kind_at(text: &str, offset: usize) -> SectionKind {
 /// If `offset` lands on one of the quoted strings inside `[link]`'s
 /// `includes = [...]` array, returns that (unresolved) path string.
 pub fn include_target_at(text: &str, offset: usize) -> Option<String> {
-    let (start, end) = link_section_range(text)?;
+    let (start, end) = section_body_range(text, "link")?;
     if offset < start || offset >= end {
         return None;
     }
@@ -84,9 +84,76 @@ pub fn include_target_at(text: &str, offset: usize) -> Option<String> {
     None
 }
 
-/// Byte range of the `[link]` table's body (after its own header line, up
-/// to the next table header or end of file).
-fn link_section_range(text: &str) -> Option<(usize, usize)> {
+/// The raw (unresolved) `defaults.root` string, if `[defaults]` declares
+/// one - for resolving where `file`/`windows-ico` completion should look.
+pub fn defaults_root(text: &str) -> Option<String> {
+    let (start, end) = section_body_range(text, "defaults")?;
+    for line in text[start..end].lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("root") else { continue };
+        let Some(rest) = rest.trim_start().strip_prefix('=') else { continue };
+        if let Some(value) = rest.trim().strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Which kind of path is expected for the string at `offset`, if any -
+/// `file`/`windows-ico`'s single value, or one of `[link]`'s `includes`
+/// array entries - used to drive filesystem-based completion.
+pub enum PathFieldKind {
+    File,
+    Includes,
+}
+
+/// If `offset` is inside a quoted string that's a `file`/`windows-ico`
+/// value or a `[link].includes` array entry, returns which kind it is,
+/// the byte range of what's already been typed inside the quotes (up to
+/// `offset` - the completion replacement range), and that typed prefix.
+pub fn path_field_at(text: &str, offset: usize) -> Option<(PathFieldKind, std::ops::Range<usize>, String)> {
+    if let Some((start, end)) = section_body_range(text, "link") {
+        if offset >= start && offset < end {
+            if let Some((span, prefix)) = quoted_prefix_span_at(text, offset) {
+                return Some((PathFieldKind::Includes, span, prefix));
+            }
+        }
+    }
+
+    let line = current_line(text, offset);
+    let key = line.split('=').next()?.trim();
+    if key == "file" || key == "windows-ico" {
+        let (span, prefix) = quoted_prefix_span_at(text, offset)?;
+        return Some((PathFieldKind::File, span, prefix));
+    }
+    None
+}
+
+/// If `offset` is inside a quoted string on its line, returns the byte
+/// range from the opening quote up to `offset` (not the whole string -
+/// only what's been typed so far) plus that same text as an owned prefix.
+fn quoted_prefix_span_at(text: &str, offset: usize) -> Option<(std::ops::Range<usize>, String)> {
+    let line_start = line_start_of(text, offset);
+    let line = current_line(text, offset);
+    let col = offset - line_start;
+
+    let mut search = 0;
+    while let Some(rel_start) = line[search..].find('"') {
+        let quote_start = search + rel_start;
+        let rel_end = line[quote_start + 1..].find('"')?;
+        let quote_end = quote_start + 1 + rel_end;
+        if col > quote_start && col <= quote_end {
+            let prefix_start = line_start + quote_start + 1;
+            return Some((prefix_start..offset, line[quote_start + 1..col].to_string()));
+        }
+        search = quote_end + 1;
+    }
+    None
+}
+
+/// Byte range of `[name]`'s table body (after its own header line, up to
+/// the next table header or end of file).
+fn section_body_range(text: &str, name: &str) -> Option<(usize, usize)> {
     let mut pos = 0usize;
     let mut body_start = None;
     for line in text.split_inclusive('\n') {
@@ -99,7 +166,7 @@ fn link_section_range(text: &str) -> Option<(usize, usize)> {
             }
             continue;
         }
-        if trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some("link") {
+        if trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) == Some(name) {
             body_start = Some(pos);
         }
     }
