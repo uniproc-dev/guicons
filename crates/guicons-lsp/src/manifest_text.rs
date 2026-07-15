@@ -29,6 +29,37 @@ pub fn family_header_at(text: &str, offset: usize) -> Option<(String, Option<u16
     Some((segments.join("-"), size))
 }
 
+/// Which kind of table `offset` falls under, found by scanning backwards
+/// for the nearest preceding table header - used to offer the right field
+/// names on completion (an entry's `file`/`iconify`/... don't make sense
+/// inside `[defaults]`, and vice versa).
+pub enum SectionKind {
+    TopLevel,
+    Defaults,
+    Link,
+    Provider,
+    Entry,
+}
+
+pub fn section_kind_at(text: &str, offset: usize) -> SectionKind {
+    for line in text[..offset].lines().rev() {
+        let trimmed = line.trim();
+        let Some(inner) = trimmed.strip_prefix('[').and_then(|s| s.strip_suffix(']')) else {
+            continue;
+        };
+        if inner.is_empty() {
+            continue;
+        }
+        return match inner {
+            "defaults" => SectionKind::Defaults,
+            "link" => SectionKind::Link,
+            _ if inner.starts_with("providers") => SectionKind::Provider,
+            _ => SectionKind::Entry,
+        };
+    }
+    SectionKind::TopLevel
+}
+
 /// If `offset` lands on one of the quoted strings inside `[link]`'s
 /// `includes = [...]` array, returns that (unresolved) path string.
 pub fn include_target_at(text: &str, offset: usize) -> Option<String> {

@@ -240,6 +240,23 @@ fn link_includes_entries_must_be_strings() {
 }
 
 #[test]
+fn link_rejects_unknown_fields() {
+    let dir = tempdir().unwrap();
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [link]
+        includes = ["icons/extra.gui.toml"]
+        includes1 = ["icons/extra.gui.toml"]
+        "#,
+    );
+    write(dir.path(), "icons/extra.gui.toml", "");
+    let (_, errors) = load_icon_manifest(&root);
+    insta::assert_debug_snapshot!(summarize_errors(dir.path(), &errors));
+}
+
+#[test]
 fn missing_manifest_file_produces_an_error_not_a_panic() {
     let dir = tempdir().unwrap();
     let missing = dir.path().join("does-not-exist.gui.toml");

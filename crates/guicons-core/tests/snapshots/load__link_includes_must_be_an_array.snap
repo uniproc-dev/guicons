@@ -11,6 +11,6 @@ expression: "summarize_errors(dir.path(), &errors)"
                 40,
             ),
         ),
-        message: "`link.includes` must be an array of strings",
+        message: "expected an array, found string",
     },
 ]

@@ -2,7 +2,9 @@ mod manifest_text;
 mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
-use manifest_text::{family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at};
+use manifest_text::{
+    family_header_at, include_target_at, keyword_at, offset_line_overlaps, provider_name_at, section_kind_at, SectionKind,
+};
 use position::LineIndex;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -320,6 +322,21 @@ impl LanguageServer for Backend {
             let items = variants
                 .into_iter()
                 .map(|variant| CompletionItem::new_simple(variant, "variant".to_string()))
+                .collect();
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
+        if line_prefix.is_empty() {
+            let fields: &[&str] = match section_kind_at(&text, offset) {
+                SectionKind::TopLevel => &["defaults", "link", "providers"],
+                SectionKind::Defaults => &["root", "provider", "size"],
+                SectionKind::Link => &["includes"],
+                SectionKind::Provider => &["variants", "sizes"],
+                SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "variants"],
+            };
+            let items = fields
+                .iter()
+                .map(|name| CompletionItem::new_simple(name.to_string(), "field".to_string()))
                 .collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }

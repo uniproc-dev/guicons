@@ -12,7 +12,9 @@ use crate::paths::{canonicalize_or_self, find_workspace_root, resolve_entry_path
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml_span::value::{Table, ValueInner};
+use toml_span::de_helpers::TableHelper;
+use toml_span::value::ValueInner;
+use toml_span::Value;
 
 /// Parse a manifest (and any files it `[link]`ed manifests), collecting every
 /// problem found instead of stopping at the first one.
@@ -175,9 +177,11 @@ fn load_icon_manifest_inner(
         resolve_providers(declarations, &mut diags)
     };
 
+    let link_value = root_table.remove("link");
+
     let mut entries = Vec::new();
     let mut providers = HashMap::new();
-    collect_includes(&root_table, &manifest_path, seen, source_paths, errors, &mut entries, &mut providers);
+    collect_includes(link_value, &manifest_path, seen, source_paths, errors, &mut entries, &mut providers);
     // A file's own `[providers.*]` take precedence over anything an
     // `[link]`d file declared under the same name.
     providers.extend(own_providers);
@@ -219,7 +223,7 @@ fn load_icon_manifest_inner(
 }
 
 fn collect_includes(
-    table: &Table<'_>,
+    link_value: Option<Value<'_>>,
     manifest_path: &Path,
     seen: &mut Vec<PathBuf>,
     source_paths: &mut Vec<PathBuf>,
@@ -227,42 +231,39 @@ fn collect_includes(
     entries_acc: &mut Vec<IconEntry>,
     providers_acc: &mut HashMap<String, ProviderSchema>,
 ) {
-    let Some(link_value) = table.get("link") else {
+    let Some(mut link_value) = link_value else {
         return;
     };
-    let Some(link_table) = link_value.as_table() else {
+    let link_span = link_value.span;
+    let ValueInner::Table(link_table) = link_value.take() else {
         errors.push(ManifestError {
             file: manifest_path.to_path_buf(),
-            span: Some(link_value.span.into()),
+            span: Some(link_span.into()),
             message: "`[link]` must be a table".to_string(),
         });
         return;
     };
 
-    let Some(includes_value) = link_table.get("includes") else {
-        return;
+    let includes: Option<Vec<String>> = {
+        let mut th = TableHelper::from((link_table, link_span));
+        let includes = th.optional("includes");
+        let mut diags = Diagnostics {
+            file: manifest_path,
+            errors,
+        };
+        if let Err(err) = th.finalize(None) {
+            diags.push_deser_error(err);
+        }
+        includes
     };
-    let Some(includes_array) = includes_value.as_array() else {
-        errors.push(ManifestError {
-            file: manifest_path.to_path_buf(),
-            span: Some(includes_value.span.into()),
-            message: "`link.includes` must be an array of strings".to_string(),
-        });
+    let Some(includes) = includes else {
         return;
     };
 
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
-    for value in includes_array {
-        let Some(path) = value.as_str() else {
-            errors.push(ManifestError {
-                file: manifest_path.to_path_buf(),
-                span: Some(value.span.into()),
-                message: "`link.includes` entries must be strings".to_string(),
-            });
-            continue;
-        };
-        let child = resolve_entry_path(base, path);
+    for path in includes {
+        let child = resolve_entry_path(base, &path);
         let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors, None);
         entries_acc.extend(child_manifest.entries);
         providers_acc.extend(child_manifest.providers);

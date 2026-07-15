@@ -7,10 +7,10 @@ expression: "summarize_errors(dir.path(), &errors)"
         file: "icons.gui.toml",
         span: Some(
             (
-                36,
-                37,
+                9,
+                104,
             ),
         ),
-        message: "expected a string, found integer",
+        message: "unexpected keys in table: `[(\"includes1\", Span { start: 68, end: 77 })]`\nexpected: [\"includes\"]",
     },
 ]

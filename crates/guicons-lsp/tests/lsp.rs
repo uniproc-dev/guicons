@@ -407,3 +407,112 @@ async fn goto_definition_on_the_file_keyword_itself_jumps_to_the_asset() {
     let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
     assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(asset).unwrap());
 }
+
+#[tokio::test]
+async fn completion_at_top_level_lists_manifest_sections() {
+    let dir = tempdir().unwrap();
+    let content = "\n[docker]\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 0 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"defaults"), "{labels:?}");
+    assert!(labels.contains(&"link"), "{labels:?}");
+    assert!(labels.contains(&"providers"), "{labels:?}");
+}
+
+#[tokio::test]
+async fn completion_inside_an_entry_lists_source_fields() {
+    let dir = tempdir().unwrap();
+    let content = "[docker]\n\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 0 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"file"), "{labels:?}");
+    assert!(labels.contains(&"iconify"), "{labels:?}");
+    assert!(labels.contains(&"variants"), "{labels:?}");
+}
+
+#[tokio::test]
+async fn completion_inside_link_section_suggests_includes() {
+    let dir = tempdir().unwrap();
+    let content = "[link]\n\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 0 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result.as_array().expect("array response");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, vec!["includes"]);
+}
