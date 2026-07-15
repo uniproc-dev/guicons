@@ -18,6 +18,7 @@ expression: entries
         dynamic: false,
         windows_ico: None,
         span: 57..92,
+        file: "",
     },
     IconEntry {
         key: "settings-24-filled",
@@ -34,5 +35,6 @@ expression: entries
         dynamic: false,
         windows_ico: None,
         span: 150..185,
+        file: "",
     },
 ]

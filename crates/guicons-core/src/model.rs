@@ -30,6 +30,7 @@ pub struct IconEntry {
     pub(crate) dynamic: bool,
     pub(crate) windows_ico: Option<PathBuf>,
     pub(crate) span: Range<usize>,
+    pub(crate) file: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,7 +142,15 @@ impl IconEntry {
     /// Byte range of this entry's table in the manifest source (the
     /// variant's inline table, or the flat entry's table) - for editor
     /// tooling that needs to map a cursor position back to an entry.
+    /// Only meaningful together with [`Self::file`] - spans from
+    /// different files (e.g. across `[include]`) can overlap numerically.
     pub fn span(&self) -> Range<usize> {
         self.span.clone()
+    }
+
+    /// The specific manifest file this entry was declared in - the root
+    /// manifest, or one of its `[include]`d files.
+    pub fn file(&self) -> &Path {
+        &self.file
     }
 }

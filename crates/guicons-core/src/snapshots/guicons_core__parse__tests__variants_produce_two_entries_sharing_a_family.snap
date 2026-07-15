@@ -16,6 +16,7 @@ expression: entries
         dynamic: false,
         windows_ico: None,
         span: 54..86,
+        file: "",
     },
     IconEntry {
         key: "settings-regular",
@@ -30,5 +31,6 @@ expression: entries
         dynamic: false,
         windows_ico: None,
         span: 118..151,
+        file: "",
     },
 ]

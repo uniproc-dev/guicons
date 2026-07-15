@@ -22,8 +22,10 @@ pub fn service() -> (LspService<Backend>, ClientSocket) {
 }
 
 impl Backend {
+    /// Canonicalized to match `IconEntry::file()`, which `guicons_core`
+    /// also stamps with a canonicalized path.
     fn path_for_uri(uri: &Url) -> Option<PathBuf> {
-        uri.to_file_path().ok()
+        uri.to_file_path().ok().map(|path| guicons_core::canonicalize_or_self(&path))
     }
 
     async fn document_text(&self, uri: &Url) -> Option<String> {
@@ -136,7 +138,11 @@ impl LanguageServer for Backend {
         let Some(offset) = index.offset(&text, position) else { return Ok(None) };
 
         let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
-        let Some(entry) = manifest.entries().iter().find(|entry| entry.span().contains(&offset)) else {
+        let Some(entry) = manifest
+            .entries()
+            .iter()
+            .find(|entry| entry.file() == path && entry.span().contains(&offset))
+        else {
             return Ok(None);
         };
 

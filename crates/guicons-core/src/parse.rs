@@ -224,6 +224,9 @@ fn parse_entry(
         dynamic,
         windows_ico,
         span: table_span.into(),
+        // Filled in by `load`, which is the only layer that knows which
+        // file's table tree is currently being walked.
+        file: PathBuf::new(),
     })
 }
 

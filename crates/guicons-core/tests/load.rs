@@ -316,3 +316,36 @@ fn load_from_str_still_resolves_includes_from_disk() {
     assert!(manifest.entry_for_key("docker").is_some());
     assert!(manifest.entry_for_key("back").is_some());
 }
+
+#[test]
+fn entries_carry_the_file_they_were_declared_in_even_across_includes() {
+    let dir = tempdir().unwrap();
+    let nav = write(
+        dir.path(),
+        "icons/nav.gui.toml",
+        r#"
+        [back]
+        file = "back.svg"
+        "#,
+    );
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [include]
+        nav = "icons/nav.gui.toml"
+
+        [docker]
+        file = "docker.svg"
+        "#,
+    );
+
+    let (manifest, errors) = load_icon_manifest(&root);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let root_canon = fs::canonicalize(&root).unwrap_or(root);
+    let nav_canon = fs::canonicalize(&nav).unwrap_or(nav);
+
+    assert_eq!(manifest.entry_for_key("docker").unwrap().file(), root_canon);
+    assert_eq!(manifest.entry_for_key("back").unwrap().file(), nav_canon);
+}

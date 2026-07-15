@@ -182,6 +182,7 @@ fn load_icon_manifest_inner(
     // `[include]`d file declared under the same name.
     providers.extend(own_providers);
 
+    let own_entries_start = entries.len();
     {
         let mut diags = Diagnostics {
             file: &manifest_path,
@@ -195,6 +196,14 @@ fn load_icon_manifest_inner(
             &mut diags,
             &mut entries,
         );
+    }
+    // `collect_entries` doesn't know which file it's parsing (that's the
+    // whole point of the parse/load split) - entries from `[include]`d
+    // files already have `file` set correctly by their own recursive
+    // `load_icon_manifest_inner` call, so only stamp the ones this level
+    // just added for its own root table.
+    for entry in &mut entries[own_entries_start..] {
+        entry.file = manifest_path.clone();
     }
 
     entries.sort_by(|a, b| a.key().cmp(b.key()));

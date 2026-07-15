@@ -104,6 +104,53 @@ async fn hover_reports_entry_details_at_cursor() {
     assert!(value.contains("docker"), "{value}");
 }
 
+/// Hovering the *including* document's own entry, with an `[include]`
+/// present, must report that entry - not one pulled in from the included
+/// file. (The deterministic version of this check, exercising
+/// `IconEntry::file()` directly against exact byte spans, lives in
+/// `guicons-core/tests/load.rs`.)
+#[tokio::test]
+async fn hover_reports_the_root_documents_own_entry_when_an_include_is_present() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "nav.gui.toml", "[back]\nfile = \"back.svg\"\n");
+    let root_content = "[include]\nnav = \"nav.gui.toml\"\n\n[docker]\nfile = \"docker.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", root_content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": root_content }
+        })),
+        None,
+    )
+    .await;
+
+    // Position of `docker.svg` within the root document's own text.
+    let offset = root_content.find("docker.svg").unwrap();
+    let line = root_content[..offset].matches('\n').count();
+    let line_start = root_content[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let character = root_content[line_start..offset].len();
+
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("docker"), "{value}");
+    assert!(!value.contains("back"), "{value}");
+}
+
 #[tokio::test]
 async fn completion_inside_providers_header_lists_builtin_names() {
     let dir = tempdir().unwrap();
