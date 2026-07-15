@@ -45,6 +45,7 @@ pub(crate) fn collect_entries(
     table: Table<'_>,
     workspace_root: &Path,
     defaults: &ManifestDefaults,
+    providers: &HashMap<String, ProviderSchema>,
     diags: &mut Diagnostics,
     acc: &mut Vec<IconEntry>,
 ) {
@@ -74,6 +75,7 @@ pub(crate) fn collect_entries(
                         entry_span,
                         workspace_root,
                         defaults,
+                        providers,
                         explicit_size,
                         diags,
                     ) {
@@ -104,6 +106,7 @@ pub(crate) fn collect_entries(
             table_span,
             workspace_root,
             defaults,
+            providers,
             explicit_size,
             diags,
         ) {
@@ -127,7 +130,7 @@ pub(crate) fn collect_entries(
         };
         let mut next_path = path.clone();
         next_path.push(key_name);
-        collect_entries(next_path, sub_table, workspace_root, defaults, diags, acc);
+        collect_entries(next_path, sub_table, workspace_root, defaults, providers, diags, acc);
     }
 }
 
@@ -145,6 +148,7 @@ fn parse_entry(
     table_span: Span,
     workspace_root: &Path,
     defaults: &ManifestDefaults,
+    providers: &HashMap<String, ProviderSchema>,
     explicit_size: Option<u16>,
     diags: &mut Diagnostics,
 ) -> Option<IconEntry> {
@@ -204,6 +208,13 @@ fn parse_entry(
     } else if let Some(url) = url {
         IconEntrySource::Url(url)
     } else if let Some(glyph) = glyph {
+        if let Err(reason) = crate::model::try_parse_glyph_spec(&glyph) {
+            diags.error(
+                Some(table_span.into()),
+                format!("icon manifest entry `{key}` has an invalid glyph spec: {reason}"),
+            );
+            return None;
+        }
         IconEntrySource::Glyph(glyph)
     } else {
         diags.error(
@@ -212,6 +223,59 @@ fn parse_entry(
         );
         return None;
     };
+
+    // Only the *auto-built* id (from `defaults.provider` + this entry's own
+    // `variant`/`size`) is worth validating against the provider's schema -
+    // an explicitly-written `iconify = "..."` string is deliberately
+    // unconstrained (real manifests reference dozens of iconify
+    // collections - `mdi`, `tabler`, `fa`, ... - with no `[providers.*]`
+    // declared for most of them at all, since a schema is only needed for
+    // auto-building/decomposing ids, not for using one verbatim). But if
+    // `defaults.provider` itself doesn't resolve to a known provider, or
+    // this entry's variant/size aren't among the schema it does resolve to,
+    // the id being silently built is one nothing will ever find.
+    if default_iconify.is_some() {
+        if let IconEntrySource::Iconify(id) = &source {
+            let provider_name = defaults.provider.as_deref().expect("default_iconify_id only builds an id when defaults.provider is set");
+            match providers.get(provider_name) {
+                None => {
+                    diags.error(
+                        Some(table_span.into()),
+                        format!(
+                            "icon manifest entry `{key}` auto-builds iconify id `{id}` from `defaults.provider = \"{provider_name}\"`, but `{provider_name}` isn't a known provider (builtin or declared in `[providers]`)"
+                        ),
+                    );
+                    return None;
+                }
+                Some(schema) => {
+                    if let Some(variant_name) = variant.as_deref() {
+                        if !schema.variants.is_empty() && !schema.variants.iter().any(|known| known == variant_name) {
+                            diags.error(
+                                Some(table_span.into()),
+                                format!(
+                                    "icon manifest entry `{key}` has variant `{variant_name}`, not declared in `[providers.{provider_name}]`'s variants ({})",
+                                    schema.variants.join(", ")
+                                ),
+                            );
+                            return None;
+                        }
+                    }
+                    if let Some(size) = resolved_size {
+                        if !schema.sizes.is_empty() && !schema.sizes.contains(&size) {
+                            diags.error(
+                                Some(table_span.into()),
+                                format!(
+                                    "icon manifest entry `{key}` has size `{size}`, not declared in `[providers.{provider_name}]`'s sizes ({})",
+                                    schema.sizes.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
+                                ),
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let windows_ico = windows_ico.map(|value| resolve_file_from_roots(&roots, &value));
 
@@ -554,12 +618,23 @@ mod tests {
         let table = take_table(&mut root).expect("root must be a table");
         let mut errors = Vec::new();
         let mut entries = Vec::new();
+        // The builtin provider set, same as what `load.rs` always merges
+        // in for its own file (see `resolve_providers`) before entries are
+        // collected - needed so auto-built iconify ids (via
+        // `defaults.provider`) can be validated against a real schema.
+        let providers = {
+            let mut diags = Diagnostics {
+                file: Path::new("test.gui.toml"),
+                errors: &mut errors,
+            };
+            resolve_providers(HashMap::new(), &mut diags)
+        };
         {
             let mut diags = Diagnostics {
                 file: Path::new("test.gui.toml"),
                 errors: &mut errors,
             };
-            collect_entries(Vec::new(), table, &workspace_root(), &defaults, &mut diags, &mut entries);
+            collect_entries(Vec::new(), table, &workspace_root(), &defaults, &providers, &mut diags, &mut entries);
         }
         (entries, errors.into_iter().map(|e| e.message).collect())
     }

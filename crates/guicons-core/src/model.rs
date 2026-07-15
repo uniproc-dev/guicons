@@ -43,9 +43,13 @@ pub enum IconEntrySource {
 
 /// Parses a `[glyph]` entry's `font-family:codepoint` spec, where
 /// `codepoint` is either a single literal character or a `U+XXXX` hex escape.
-pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
+/// Non-panicking - used at load/validation time (`parse.rs`'s `parse_entry`)
+/// where a malformed spec should be a `ManifestError`, not a crash. See
+/// [`parse_glyph_spec`] for the panicking wrapper macro-expansion/codegen
+/// call sites use, where the manifest is assumed already validated.
+pub fn try_parse_glyph_spec(spec: &str) -> Result<(String, char), String> {
     let Some((font_family, codepoint)) = spec.split_once(':') else {
-        panic!("Glyph manifest entry `{context}` must use `font-family:codepoint`, got `{spec}`");
+        return Err(format!("must use `font-family:codepoint`, got `{spec}`"));
     };
     let font_family = font_family.trim();
     let codepoint = codepoint.trim();
@@ -57,11 +61,20 @@ pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
             .or_else(|| codepoint.strip_prefix("u+"))
             .unwrap_or(codepoint);
         let scalar = u32::from_str_radix(normalized, 16)
-            .unwrap_or_else(|_| panic!("Glyph manifest entry `{context}` has invalid codepoint `{codepoint}`"));
-        char::from_u32(scalar)
-            .unwrap_or_else(|| panic!("Glyph manifest entry `{context}` has non-scalar codepoint `{codepoint}`"))
+            .map_err(|_| format!("has invalid codepoint `{codepoint}`"))?;
+        char::from_u32(scalar).ok_or_else(|| format!("has non-scalar codepoint `{codepoint}`"))?
     };
-    (font_family.to_string(), ch)
+    Ok((font_family.to_string(), ch))
+}
+
+/// Parses a `[glyph]` entry's `font-family:codepoint` spec, panicking with
+/// `context` (the entry's key) on a malformed spec - for codegen/macro call
+/// sites (`guicons-macros`, `guicons-build`) that only ever run against a
+/// manifest `icons check`/`load_icon_manifest` has already validated via
+/// [`try_parse_glyph_spec`], so a failure here means the cached/materialized
+/// data itself is corrupt, not a user input problem worth a graceful error.
+pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
+    try_parse_glyph_spec(spec).unwrap_or_else(|message| panic!("Glyph manifest entry `{context}` {message}"))
 }
 
 #[derive(Clone, Debug, Default)]

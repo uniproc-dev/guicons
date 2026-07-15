@@ -97,6 +97,43 @@ fn missing_file_diagnostic(
     })
 }
 
+/// `iconify = "provider:name"` entries whose SVG isn't cached locally yet -
+/// same check `guicons-cli::check` does, mirrored here so the editor
+/// doesn't fall behind the CLI. Informational, not a warning/error: not
+/// being cached yet doesn't mean the id is wrong, just unconfirmed
+/// without a network fetch (`icons fetch`), which neither `check` nor
+/// this diagnostic ever does itself.
+fn unresolved_iconify_diagnostics(text: &str, path: &Path, manifest: &IconManifest, index: &LineIndex) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for entry in manifest.entries() {
+        if entry.file() != path {
+            continue;
+        }
+        let IconEntrySource::Iconify(id) = entry.source() else { continue };
+
+        let message = if id.split_once(':').is_none() {
+            format!("iconify id `{id}` isn't in `provider:name` form - it will never resolve")
+        } else {
+            let cache_path = guicons_net::iconify_cache_path(manifest.workspace_root(), id);
+            if cache_path.exists() {
+                continue;
+            }
+            format!(
+                "iconify icon `{id}` isn't cached locally yet - can't confirm it resolves without a network fetch (`icons fetch` or `GUICONS_ALLOW_NETWORK=1`)"
+            )
+        };
+
+        diagnostics.push(Diagnostic {
+            range: index.range(text, entry.span()),
+            severity: Some(DiagnosticSeverity::INFORMATION),
+            message,
+            source: Some("guicons".to_string()),
+            ..Default::default()
+        });
+    }
+    diagnostics
+}
+
 /// Closest sibling file by name (Levenshtein distance), for a "did you
 /// mean" suggestion - `None` if nothing in the directory is plausibly a
 /// typo of `target`'s name (rather than just unrelated).
@@ -158,10 +195,11 @@ pub struct Backend {
     workspace_root: RwLock<Option<PathBuf>>,
     /// Whether to publish raw `TOML syntax error: ...` diagnostics -
     /// configurable (`initializationOptions: { "reportTomlSyntaxErrors":
-    /// false }`) since an editor with its own TOML language support (e.g.
-    /// JetBrains IDEs) already reports these, and having both report the
-    /// same syntax error twice is just noise. Semantic diagnostics
-    /// (unknown field, missing file, ...) aren't affected by this flag.
+    /// true }`), **off by default**: an editor with its own TOML language
+    /// support (e.g. JetBrains IDEs, almost always installed alongside
+    /// this LSP) already reports these, and having both report the same
+    /// syntax error twice is just noise. Semantic diagnostics (unknown
+    /// field, missing file, ...) aren't affected by this flag.
     report_toml_syntax_errors: std::sync::atomic::AtomicBool,
 }
 
@@ -173,7 +211,7 @@ pub fn service() -> (LspService<Backend>, ClientSocket) {
         client,
         documents: RwLock::new(HashMap::new()),
         workspace_root: RwLock::new(None),
-        report_toml_syntax_errors: std::sync::atomic::AtomicBool::new(true),
+        report_toml_syntax_errors: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
@@ -227,6 +265,7 @@ impl Backend {
             })
             .collect();
         diagnostics.extend(missing_file_diagnostics(&text, &path, &manifest, &index));
+        diagnostics.extend(unresolved_iconify_diagnostics(&text, &path, &manifest, &index));
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
@@ -668,6 +707,46 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].message.contains("dokcer.svg"), "{}", diagnostics[0].message);
         assert!(diagnostics[0].message.contains("did you mean `docker.svg`"), "{}", diagnostics[0].message);
+    }
+
+    #[test]
+    fn unresolved_iconify_diagnostics_notes_an_uncached_icon() {
+        let dir = tempdir().unwrap();
+        let content = "[docker]\niconify = \"mdi:home\"\n";
+        let path = dir.path().join("icons.gui.toml");
+        std::fs::write(&path, content).unwrap();
+
+        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, content);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let index = LineIndex::new(content);
+        let diagnostics =
+            unresolved_iconify_diagnostics(content, &guicons_core::canonicalize_or_self(&path), &manifest, &index);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::INFORMATION));
+        assert!(diagnostics[0].message.contains("mdi:home"), "{}", diagnostics[0].message);
+        assert!(diagnostics[0].message.contains("isn't cached locally"), "{}", diagnostics[0].message);
+    }
+
+    #[test]
+    fn unresolved_iconify_diagnostics_is_silent_once_cached() {
+        let dir = tempdir().unwrap();
+        let content = "[docker]\niconify = \"mdi:home\"\n";
+        let path = dir.path().join("icons.gui.toml");
+        std::fs::write(&path, content).unwrap();
+        let cache_path = dir.path().join(".cache/guicons/mdi/home.svg");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, "<svg/>").unwrap();
+
+        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, content);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let index = LineIndex::new(content);
+        let diagnostics =
+            unresolved_iconify_diagnostics(content, &guicons_core::canonicalize_or_self(&path), &manifest, &index);
+
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
     #[test]

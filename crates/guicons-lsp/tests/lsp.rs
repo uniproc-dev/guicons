@@ -818,18 +818,18 @@ async fn completion_inside_an_iconify_value_caps_a_huge_collection_and_marks_it_
 #[tokio::test]
 async fn initialize_reads_the_report_toml_syntax_errors_option() {
     let (mut service, _socket) = guicons_lsp::service();
-    assert!(service.inner().reports_toml_syntax_errors(), "defaults to on");
+    assert!(!service.inner().reports_toml_syntax_errors(), "defaults to off - most editors already report these");
 
     call(
         &mut service,
         "initialize",
         Some(json!({
             "capabilities": {},
-            "initializationOptions": { "reportTomlSyntaxErrors": false }
+            "initializationOptions": { "reportTomlSyntaxErrors": true }
         })),
         Some(1),
     )
     .await;
 
-    assert!(!service.inner().reports_toml_syntax_errors());
+    assert!(service.inner().reports_toml_syntax_errors());
 }

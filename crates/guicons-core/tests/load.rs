@@ -256,6 +256,36 @@ fn link_rejects_unknown_fields() {
     insta::assert_debug_snapshot!(summarize_errors(dir.path(), &errors));
 }
 
+/// A `[link]`-included file that doesn't exist on disk used to surface as
+/// a spanless error attributed to the *missing child's own path* - which
+/// meant it silently vanished from LSP diagnostics (filtered out, since
+/// they're published against the *parent*, currently-open document) and
+/// showed up in `icons check` with no location at all. It should instead
+/// point at the `includes = [...]` entry that named it, in the parent file.
+#[test]
+fn link_includes_a_nonexistent_file_points_at_the_includes_entry_in_the_parent() {
+    let dir = tempdir().unwrap();
+    let root = write(
+        dir.path(),
+        "icons.gui.toml",
+        r#"
+        [link]
+        includes = ["icons/extra.gui.toml"]
+        "#,
+    );
+    // Deliberately never created.
+    let (_, errors) = load_icon_manifest(&root);
+
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        fs::canonicalize(&errors[0].file).unwrap(),
+        fs::canonicalize(&root).unwrap(),
+        "must be attributed to the parent file, not the missing child"
+    );
+    assert!(errors[0].span.is_some(), "must point at the `includes = [...]` entry, not be spanless");
+    assert!(errors[0].message.contains("icons/extra.gui.toml"), "{}", errors[0].message);
+}
+
 #[test]
 fn missing_manifest_file_produces_an_error_not_a_panic() {
     let dir = tempdir().unwrap();

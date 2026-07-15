@@ -82,10 +82,25 @@ fn run_check(manifest: &PathBuf) -> ExitCode {
         println!("\u{2713} {} - {entry_count} icon{} OK", manifest.display(), if entry_count == 1 { "" } else { "s" });
         return ExitCode::SUCCESS;
     }
-    for report in &reports {
+
+    // Advice-level notes (e.g. an iconify id that isn't cached locally
+    // yet, so `check` can't confirm it resolves without a network fetch)
+    // are printed but don't fail the command - only real errors do.
+    let (errors, notes): (Vec<_>, Vec<_>) =
+        reports.into_iter().partition(|report| report.severity() == Some(miette::Severity::Error));
+
+    for report in errors.iter().chain(&notes) {
         eprintln!("{report:?}");
     }
-    eprintln!("{} error{} found", reports.len(), if reports.len() == 1 { "" } else { "s" });
+
+    if !notes.is_empty() {
+        eprintln!("{} note{} found", notes.len(), if notes.len() == 1 { "" } else { "s" });
+    }
+    if errors.is_empty() {
+        println!("\u{2713} {} - {entry_count} icon{} OK", manifest.display(), if entry_count == 1 { "" } else { "s" });
+        return ExitCode::SUCCESS;
+    }
+    eprintln!("{} error{} found", errors.len(), if errors.len() == 1 { "" } else { "s" });
     ExitCode::FAILURE
 }
 

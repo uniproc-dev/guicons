@@ -14,7 +14,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use toml_span::de_helpers::TableHelper;
 use toml_span::value::ValueInner;
-use toml_span::Value;
+use toml_span::{Deserialize, DeserError, Value};
+
+/// Wraps a `Deserialize` value to also capture its own span - `Vec<String>`
+/// alone (what `TableHelper::optional` normally gives back) loses each
+/// array element's individual location, which is exactly what's needed to
+/// point a "this included file doesn't exist" diagnostic at the specific
+/// `includes = [...]` string that named it, rather than at the whole
+/// `[link]` table.
+struct WithSpan<T> {
+    value: T,
+    span: toml_span::Span,
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for WithSpan<T> {
+    fn deserialize(value: &mut Value<'de>) -> Result<Self, DeserError> {
+        let span = value.span;
+        T::deserialize(value).map(|value| WithSpan { value, span })
+    }
+}
 
 /// Parse a manifest (and any files it `[link]`ed manifests), collecting every
 /// problem found instead of stopping at the first one.
@@ -28,6 +46,7 @@ pub fn load_icon_manifest(manifest_path: &Path) -> (IconManifest, Vec<ManifestEr
     let mut errors = Vec::new();
     let manifest =
         load_icon_manifest_inner(manifest_path, &mut seen, &mut source_paths, &mut errors, None);
+    check_duplicate_keys(&manifest.entries, &mut errors);
     (manifest, errors)
 }
 
@@ -49,7 +68,37 @@ pub fn load_icon_manifest_from_str(
         &mut errors,
         Some(content),
     );
+    check_duplicate_keys(&manifest.entries, &mut errors);
     (manifest, errors)
+}
+
+/// Two entries sharing the same `key()` - including one from the root
+/// manifest colliding with one pulled in via `[link]` - is never checked
+/// anywhere else in `load.rs`/`parse.rs`: entries are just concatenated and
+/// sorted by key. Left unnoticed, `IconManifest::entry_for_key` would
+/// silently return whichever one `.find()` hits first (sort-order-
+/// dependent), so this runs once, over the fully merged entry list, at
+/// every public load entry point - not per-file inside the recursive
+/// `[link]` walk, which would double-report collisions that already exist
+/// purely within one included file.
+fn check_duplicate_keys(entries: &[IconEntry], errors: &mut Vec<ManifestError>) {
+    let mut first_seen: HashMap<&str, &IconEntry> = HashMap::new();
+    for entry in entries {
+        match first_seen.get(entry.key()) {
+            Some(first) => errors.push(ManifestError {
+                file: entry.file().to_path_buf(),
+                span: Some(entry.span()),
+                message: format!(
+                    "duplicate icon key `{}` - already defined in {}",
+                    entry.key(),
+                    first.file().display()
+                ),
+            }),
+            None => {
+                first_seen.insert(entry.key(), entry);
+            }
+        }
+    }
 }
 
 /// Convenience wrapper for `build.rs`: parse the manifest and panic with
@@ -197,6 +246,7 @@ fn load_icon_manifest_inner(
             root_table,
             &workspace_root,
             &defaults,
+            &providers,
             &mut diags,
             &mut entries,
         );
@@ -222,6 +272,16 @@ fn load_icon_manifest_inner(
     }
 }
 
+/// `path.display()`, without Windows' `\\?\` verbatim-path prefix -
+/// `canonicalize_or_self` (applied to `manifest_path` at the top of
+/// `load_icon_manifest_inner`) adds it, and every path resolved relative
+/// to that manifest inherits it too; it's accurate but just noise in a
+/// diagnostic message meant for a human to read.
+fn display_path(path: &Path) -> String {
+    let rendered = path.display().to_string();
+    rendered.strip_prefix(r"\\?\").unwrap_or(&rendered).to_string()
+}
+
 fn collect_includes(
     link_value: Option<Value<'_>>,
     manifest_path: &Path,
@@ -244,7 +304,7 @@ fn collect_includes(
         return;
     };
 
-    let includes: Option<Vec<String>> = {
+    let includes: Option<Vec<WithSpan<String>>> = {
         let mut th = TableHelper::from((link_table, link_span));
         let includes = th.optional("includes");
         let mut diags = Diagnostics {
@@ -262,8 +322,20 @@ fn collect_includes(
 
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
-    for path in includes {
-        let child = resolve_entry_path(base, &path);
+    for include in includes {
+        let child = resolve_entry_path(base, &include.value);
+        if !child.exists() {
+            errors.push(ManifestError {
+                file: manifest_path.to_path_buf(),
+                span: Some(include.span.into()),
+                message: format!(
+                    "`[link]` includes a file that doesn't exist: `{}` (resolved to {})",
+                    include.value,
+                    display_path(&child)
+                ),
+            });
+            continue;
+        }
         let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors, None);
         entries_acc.extend(child_manifest.entries);
         providers_acc.extend(child_manifest.providers);
