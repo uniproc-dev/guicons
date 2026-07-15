@@ -106,6 +106,15 @@ impl IconManifest {
     pub fn provider(&self, name: &str) -> Option<&ProviderSchema> {
         self.providers.get(name)
     }
+
+    /// Names of every provider resolved for this manifest - builtin,
+    /// custom, and `.override`s, all already merged (see
+    /// `parse::resolve_providers`). Not just the built-in set
+    /// (`guicons_core::builtin_provider_names`), which is static and
+    /// doesn't know about a manifest's own `[providers.<name>]` entries.
+    pub fn provider_names(&self) -> impl Iterator<Item = &str> {
+        self.providers.keys().map(String::as_str)
+    }
 }
 
 impl IconEntry {

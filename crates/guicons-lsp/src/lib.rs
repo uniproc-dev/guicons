@@ -1,10 +1,12 @@
+mod iconify_completion;
 mod manifest_text;
 mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
+use iconify_completion::IconifyContext;
 use manifest_text::{
-    defaults_root, family_header_at, include_target_at, keyword_at, offset_line_overlaps, path_field_at,
-    provider_name_at, section_kind_at, word_prefix_span, PathFieldKind, SectionKind,
+    defaults_root, family_header_at, iconify_field_at, include_target_at, keyword_at, offset_line_overlaps,
+    path_field_at, provider_name_at, section_kind_at, word_prefix_span, PathFieldKind, SectionKind,
 };
 use position::LineIndex;
 use std::collections::BTreeSet;
@@ -150,6 +152,10 @@ fn resolve_file_base_dir(manifest_path: &Path, text: &str) -> PathBuf {
 pub struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
+    /// Set from `initialize`'s `root_uri`/`workspace_folders` - needed at
+    /// `initialized` time (builtin-provider cache warmup) when no document
+    /// has been opened yet to derive a workspace root from.
+    workspace_root: RwLock<Option<PathBuf>>,
     /// Whether to publish raw `TOML syntax error: ...` diagnostics -
     /// configurable (`initializationOptions: { "reportTomlSyntaxErrors":
     /// false }`) since an editor with its own TOML language support (e.g.
@@ -166,6 +172,7 @@ pub fn service() -> (LspService<Backend>, ClientSocket) {
     LspService::new(|client| Backend {
         client,
         documents: RwLock::new(HashMap::new()),
+        workspace_root: RwLock::new(None),
         report_toml_syntax_errors: std::sync::atomic::AtomicBool::new(true),
     })
 }
@@ -183,6 +190,10 @@ impl Backend {
     /// also stamps with a canonicalized path.
     fn path_for_uri(uri: &Url) -> Option<PathBuf> {
         uri.to_file_path().ok().map(|path| guicons_core::canonicalize_or_self(&path))
+    }
+
+    async fn workspace_root(&self) -> Option<PathBuf> {
+        self.workspace_root.read().await.clone()
     }
 
     async fn document_text(&self, uri: &Url) -> Option<String> {
@@ -219,11 +230,42 @@ impl Backend {
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
+
+    /// Warms the cache for any provider this manifest declares that isn't
+    /// already one of the builtins warmed at startup - builtins are known
+    /// statically, but a manifest's own `[providers.<name>]` entries only
+    /// become visible once a document with them is open.
+    async fn warm_custom_providers(&self, uri: &Url) {
+        let Some(path) = Self::path_for_uri(uri) else { return };
+        let Some(text) = self.document_text(uri).await else { return };
+        let Some(workspace_root) = self.workspace_root().await else { return };
+
+        let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
+        let custom: Vec<String> = manifest
+            .provider_names()
+            .filter(|name| !guicons_core::builtin_provider_names().any(|builtin| builtin == *name))
+            .map(str::to_string)
+            .collect();
+        iconify_completion::warm_provider_caches(self.client.clone(), workspace_root, custom);
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let root = params
+            .root_uri
+            .as_ref()
+            .and_then(|uri| uri.to_file_path().ok())
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()
+                    .and_then(|folders| folders.first())
+                    .and_then(|folder| folder.uri.to_file_path().ok())
+            });
+        *self.workspace_root.write().await = root;
+
         if let Some(report) = params
             .initialization_options
             .as_ref()
@@ -269,6 +311,15 @@ impl LanguageServer for Backend {
             };
             let _ = client.register_capability(vec![registration]).await;
         });
+
+        // Warms the builtin providers' icon-name caches immediately, not
+        // lazily on first `didOpen` - by the time a user actually types
+        // into an `iconify = "..."` field the cache is very likely warm
+        // already, so `completion()` never has to touch the network.
+        if let Some(workspace_root) = self.workspace_root().await {
+            let providers: Vec<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
+            iconify_completion::warm_provider_caches(self.client.clone(), workspace_root, providers);
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -277,6 +328,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.set_document_text(params.text_document.uri.clone(), params.text_document.text).await;
+        self.warm_custom_providers(&params.text_document.uri).await;
         self.publish_diagnostics_for(params.text_document.uri).await;
     }
 
@@ -284,6 +336,7 @@ impl LanguageServer for Backend {
         if let Some(change) = params.content_changes.into_iter().next_back() {
             self.set_document_text(params.text_document.uri.clone(), change.text).await;
         }
+        self.warm_custom_providers(&params.text_document.uri).await;
         self.publish_diagnostics_for(params.text_document.uri).await;
     }
 
@@ -486,6 +539,61 @@ impl LanguageServer for Backend {
                 }
             }
             return Ok(Some(CompletionResponse::Array(items)));
+        }
+
+        if let Some((quote_span, typed)) = iconify_field_at(&text, offset) {
+            let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
+
+            let (items, is_incomplete) = match iconify_completion::classify(quote_span, &typed) {
+                IconifyContext::Provider { range, typed } => {
+                    let range = index.range(&text, range);
+                    let mut names: BTreeSet<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
+                    names.extend(manifest.provider_names().map(str::to_string));
+                    let items = names
+                        .into_iter()
+                        .filter(|name| name.starts_with(&typed))
+                        .map(|name| CompletionItem {
+                            label: format!("{name}:"),
+                            detail: Some("provider".to_string()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range,
+                                new_text: format!("{name}:"),
+                            })),
+                            ..Default::default()
+                        })
+                        .collect();
+                    (items, false)
+                }
+                IconifyContext::Name { provider, range, typed } => {
+                    let range = index.range(&text, range);
+                    let names = match self.workspace_root().await {
+                        Some(workspace_root) => iconify_completion::cached_names(&workspace_root, &provider),
+                        None => None,
+                    };
+                    // Some collections run into the thousands of names
+                    // (e.g. `mdi` has ~7500) - sending every match on each
+                    // keystroke is wasted bandwidth and a slow render on
+                    // the client, so cap the response and mark it
+                    // incomplete: the client is expected to re-request as
+                    // the user narrows `typed` further, per the LSP spec's
+                    // `CompletionList.isIncomplete`.
+                    const LIMIT: usize = 200;
+                    let mut matches = names.into_iter().flatten().filter(|name| name.starts_with(&typed));
+                    let items: Vec<CompletionItem> = matches
+                        .by_ref()
+                        .take(LIMIT)
+                        .map(|name| CompletionItem {
+                            label: name.clone(),
+                            detail: Some("icon".to_string()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: name })),
+                            ..Default::default()
+                        })
+                        .collect();
+                    let is_incomplete = matches.next().is_some();
+                    (items, is_incomplete)
+                }
+            };
+            return Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })));
         }
 
         if line_prefix.starts_with("variants.") {

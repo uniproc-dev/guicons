@@ -2345,6 +2345,7 @@ name = "guicons-lsp"
 version = "0.1.0"
 dependencies = [
  "guicons-core",
+ "guicons-net",
  "serde_json",
  "tempfile",
  "tokio",

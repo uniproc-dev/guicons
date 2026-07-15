@@ -129,6 +129,19 @@ pub fn path_field_at(text: &str, offset: usize) -> Option<(PathFieldKind, std::o
     None
 }
 
+/// If `offset` is inside an `iconify = "..."` value, returns the byte
+/// range of what's already been typed (up to `offset`) plus that text.
+/// Purely positional - knows nothing about the `provider:name` syntax
+/// inside the string, that's `iconify_completion`'s job.
+pub fn iconify_field_at(text: &str, offset: usize) -> Option<(std::ops::Range<usize>, String)> {
+    let line = current_line(text, offset);
+    let key = line.split('=').next()?.trim();
+    if key != "iconify" {
+        return None;
+    }
+    quoted_prefix_span_at(text, offset)
+}
+
 /// If `offset` is inside a quoted string on its line, returns the byte
 /// range from the opening quote up to `offset` (not the whole string -
 /// only what's been typed so far) plus that same text as an owned prefix.

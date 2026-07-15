@@ -652,6 +652,170 @@ async fn completion_inside_link_includes_lists_matching_manifests() {
 
 
 #[tokio::test]
+async fn completion_inside_an_iconify_value_before_the_colon_lists_provider_names() {
+    let dir = tempdir().unwrap();
+    let content = "[docker]\niconify = \"flu\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    // `iconify = "flu"` - cursor right after "flu", before the closing quote.
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 14 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    let items = result["items"].as_array().expect("completion list");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"fluent:"), "{labels:?}");
+}
+
+/// Once a provider is typed (past the `:`), completion should switch to
+/// suggesting icon names from that provider's already-cached collection -
+/// pre-seeded here to avoid depending on real network access or the
+/// background warmup actually having finished.
+#[tokio::test]
+async fn completion_inside_an_iconify_value_after_the_colon_lists_cached_icon_names() {
+    let dir = tempdir().unwrap();
+    let cache_dir = dir.path().join(".cache/guicons/_collections");
+    fs::create_dir_all(&cache_dir).unwrap();
+    fs::write(
+        cache_dir.join("mdi.json"),
+        json!({
+            "prefix": "mdi",
+            "uncategorized": ["home", "home-outline"],
+            "categories": { "misc": ["account"] }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let content = "[docker]\niconify = \"mdi:ho\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({
+            "capabilities": {},
+            "rootUri": file_uri(dir.path())
+        })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    // `iconify = "mdi:ho"` - cursor right after "ho", before the closing quote.
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 17 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    assert_eq!(result["isIncomplete"], false, "well under the cap, should not claim more exist");
+    let items = result["items"].as_array().expect("completion list");
+    let labels: Vec<&str> = items.iter().map(|item| item["label"].as_str().unwrap()).collect();
+    assert!(labels.contains(&"home"), "{labels:?}");
+    assert!(labels.contains(&"home-outline"), "{labels:?}");
+    assert!(!labels.contains(&"account"), "{labels:?}");
+
+    let item = items.iter().find(|item| item["label"] == "home").unwrap();
+    let range = &item["textEdit"]["range"];
+    assert_eq!(range["start"]["line"], 1);
+    assert_eq!(range["start"]["character"], 15);
+    assert_eq!(range["end"]["line"], 1);
+    assert_eq!(range["end"]["character"], 17);
+}
+
+/// A collection with more names than the completion cap must return only
+/// the capped prefix and mark the response `isIncomplete` - sending every
+/// match on every keystroke doesn't scale to the ~7500-name collections
+/// some real providers have (`mdi`, for instance).
+#[tokio::test]
+async fn completion_inside_an_iconify_value_caps_a_huge_collection_and_marks_it_incomplete() {
+    let dir = tempdir().unwrap();
+    let cache_dir = dir.path().join(".cache/guicons/_collections");
+    fs::create_dir_all(&cache_dir).unwrap();
+    let names: Vec<String> = (0..500).map(|i| format!("icon-{i:04}")).collect();
+    fs::write(cache_dir.join("mdi.json"), json!({ "prefix": "mdi", "uncategorized": names }).to_string()).unwrap();
+
+    let content = "[docker]\niconify = \"mdi:icon-\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "toml", "version": 1, "text": content }
+        })),
+        None,
+    )
+    .await;
+
+    // `iconify = "mdi:icon-"` - cursor right after "icon-", before the closing quote.
+    let result = call(
+        &mut service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 20 }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+
+    assert_eq!(result["isIncomplete"], true, "500 matches exceed the cap");
+    let items = result["items"].as_array().expect("completion list");
+    assert!(items.len() < 500, "response should be capped, got {}", items.len());
+}
+
+#[tokio::test]
 async fn initialize_reads_the_report_toml_syntax_errors_option() {
     let (mut service, _socket) = guicons_lsp::service();
     assert!(service.inner().reports_toml_syntax_errors(), "defaults to on");
