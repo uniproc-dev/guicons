@@ -9,10 +9,23 @@ use winnow::combinator::{opt, preceded, repeat};
 use winnow::token::{literal, one_of};
 use winnow::{Parser, Result as WinnowResult};
 
+/// Resolves a selector to raw icon data (`IconData`) at compile time, no
+/// manifest-key indirection - the "just give me the bytes" path.
 #[proc_macro]
 pub fn icon(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as IconMacroInput);
     expand_icon(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+/// Resolves a `family`/`family.variant`/`family.size`/`family.size.variant`
+/// selector to the manifest's `IconKey` constant, for callers that need
+/// runtime-swappable resolution (theming, hot-reload via `IconResolver`).
+#[proc_macro]
+pub fn icon_key(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as IconMacroInput);
+    expand_icon_key(input)
         .unwrap_or_else(Error::into_compile_error)
         .into()
 }
@@ -22,13 +35,14 @@ struct IconMacroInput {
     module: Ident,
 }
 
-/// `guicons::icon!` accepts two unrelated selector shapes:
+/// A selector shared by `icon!` and `icon_key!`:
 /// `family`/`family.variant`/`family.size.variant`/`family.size` resolves
-/// against `icons.gui.toml` to an `IconKey` (the `size` segment is only
-/// needed when a family has the same variant at more than one size -
-/// otherwise it's redundant and can be left off); `"set:name"` (a raw
-/// iconify id) resolves through `guicons-net`'s cache with no manifest
-/// lookup, to `IconData` instead.
+/// against `icons.gui.toml` (the `size` segment is only needed when a
+/// family has the same variant at more than one size - otherwise it's
+/// redundant and can be left off); `"set:name"` (a raw iconify id)
+/// resolves through `guicons-net`'s cache with no manifest lookup.
+/// `icon!` turns either into `IconData`; `icon_key!` only supports
+/// `FamilyVariant` - there's no manifest key for a raw iconify id.
 #[derive(Clone, Debug)]
 enum IconSelector {
     FamilyVariant {
@@ -70,13 +84,27 @@ impl Parse for IconMacroInput {
 fn expand_icon(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
     match input.selector {
         IconSelector::FamilyVariant { family, size, variant } => {
-            expand_family_variant(&family, size, variant.as_deref(), input.module)
+            expand_family_variant_data(&family, size, variant.as_deref())
         }
         IconSelector::Iconify(id) => expand_iconify_literal(&id),
     }
 }
 
-fn expand_family_variant(
+fn expand_icon_key(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
+    match input.selector {
+        IconSelector::FamilyVariant { family, size, variant } => {
+            expand_family_variant_key(&family, size, variant.as_deref(), input.module)
+        }
+        IconSelector::Iconify(id) => Err(Error::new(
+            Span::call_site(),
+            format!(
+                "`icon_key!` doesn't support iconify literals - there's no manifest key for a raw iconify id `{id}`, use `icon!` instead"
+            ),
+        )),
+    }
+}
+
+fn expand_family_variant_key(
     family: &str,
     size: Option<u16>,
     variant: Option<&str>,
@@ -96,6 +124,53 @@ fn expand_family_variant(
 
     let key_ident = Ident::new(&guicons_core::rust_const_name(&key), Span::call_site());
     Ok(quote! { #module::keys::#key_ident })
+}
+
+fn expand_family_variant_data(
+    family: &str,
+    size: Option<u16>,
+    variant: Option<&str>,
+) -> Result<proc_macro2::TokenStream> {
+    let manifest_path = manifest_dir()?.join("icons.gui.toml");
+    let manifest = load_manifest(&manifest_path)?;
+    let entry = match manifest.entry_for_family_variant(family, size, variant) {
+        Some(entry) => entry,
+        None => {
+            return Err(Error::new(
+                Span::call_site(),
+                unknown_icon_message(&manifest, family, size, variant),
+            ));
+        }
+    };
+
+    match entry.source() {
+        guicons_core::IconEntrySource::File(path) => {
+            let variant_ident = Ident::new(image_kind(path), Span::call_site());
+            let path = path.to_string_lossy().into_owned();
+            Ok(quote! { guicons::IconData::#variant_ident(include_bytes!(#path)) })
+        }
+        guicons_core::IconEntrySource::Iconify(id) => expand_iconify_literal(id),
+        guicons_core::IconEntrySource::Url(url) => expand_url_literal(url),
+        guicons_core::IconEntrySource::Glyph(spec) => {
+            let (font_family, codepoint) = guicons_core::parse_glyph_spec(spec, entry.key());
+            Ok(quote! { guicons::IconData::Glyph { codepoint: #codepoint, font_family: #font_family } })
+        }
+    }
+}
+
+fn image_kind(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("png") => "Png",
+        _ => "Svg",
+    }
+}
+
+fn expand_url_literal(url: &str) -> Result<proc_macro2::TokenStream> {
+    let start = manifest_dir()?;
+    let cache_path = guicons_net::url_cache_path(&start, url);
+    guicons_net::ensure_cached(&cache_path, url);
+    let path = cache_path.to_string_lossy().into_owned();
+    Ok(quote! { guicons::IconData::Svg(include_bytes!(#path)) })
 }
 
 fn expand_iconify_literal(id: &str) -> Result<proc_macro2::TokenStream> {

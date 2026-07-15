@@ -29,11 +29,23 @@ fn main() {
 
 ```rust
 // lib.rs or main.rs
-mod icons {
-    include!(concat!(env!("OUT_DIR"), "/icons.rs"));
-}
+guicons::include_icons!();
 
 let key = icons::key_from_dynamic_family_variant("settings", None, Some("filled"));
+```
+
+With the `macros` feature, `guicons::icon!` resolves a selector straight to
+`IconData` at compile time (no registry lookup needed):
+
+```rust
+let data = guicons::icon!(settings.filled); // IconData::Svg(..)
+```
+
+Use `guicons::icon_key!` instead when you need a runtime-swappable
+`IconKey` (theming, hot-reload via `IconResolver`):
+
+```rust
+let key = guicons::icon_key!(settings.filled); // icons::keys::SETTINGS_FILLED
 ```
 
 Use `guicons` normally at runtime, and add `guicons-build` as a

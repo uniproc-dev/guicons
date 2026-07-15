@@ -65,7 +65,7 @@ pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -
                     }
                 }
                 IconEntrySource::Glyph(glyph) => {
-                    let (font_family, codepoint) = parse_glyph(glyph, entry.key());
+                    let (font_family, codepoint) = guicons_core::parse_glyph_spec(glyph, entry.key());
                     MaterializedIconBackend::Glyph {
                         font_family,
                         codepoint,
@@ -87,27 +87,6 @@ pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -
 
 pub(crate) fn output_stem(key: &str) -> String {
     key.replace(['.', '_'], "-")
-}
-
-fn parse_glyph(glyph: &str, key: &str) -> (String, char) {
-    let Some((font_family, codepoint)) = glyph.split_once(':') else {
-        panic!("Glyph manifest entry `{key}` must use `font-family:codepoint`, got `{glyph}`");
-    };
-    let font_family = font_family.trim();
-    let codepoint = codepoint.trim();
-    let ch = if codepoint.chars().count() == 1 {
-        codepoint.chars().next().unwrap()
-    } else {
-        let normalized = codepoint
-            .strip_prefix("U+")
-            .or_else(|| codepoint.strip_prefix("u+"))
-            .unwrap_or(codepoint);
-        let scalar = u32::from_str_radix(normalized, 16)
-            .unwrap_or_else(|_| panic!("Glyph manifest entry `{key}` has invalid codepoint `{codepoint}`"));
-        char::from_u32(scalar)
-            .unwrap_or_else(|| panic!("Glyph manifest entry `{key}` has non-scalar codepoint `{codepoint}`"))
-    };
-    (font_family.to_string(), ch)
 }
 
 fn copy_if_changed(src: &Path, dest: &Path) {

@@ -38,6 +38,29 @@ pub enum IconEntrySource {
     Glyph(String),
 }
 
+/// Parses a `[glyph]` entry's `font-family:codepoint` spec, where
+/// `codepoint` is either a single literal character or a `U+XXXX` hex escape.
+pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
+    let Some((font_family, codepoint)) = spec.split_once(':') else {
+        panic!("Glyph manifest entry `{context}` must use `font-family:codepoint`, got `{spec}`");
+    };
+    let font_family = font_family.trim();
+    let codepoint = codepoint.trim();
+    let ch = if codepoint.chars().count() == 1 {
+        codepoint.chars().next().unwrap()
+    } else {
+        let normalized = codepoint
+            .strip_prefix("U+")
+            .or_else(|| codepoint.strip_prefix("u+"))
+            .unwrap_or(codepoint);
+        let scalar = u32::from_str_radix(normalized, 16)
+            .unwrap_or_else(|_| panic!("Glyph manifest entry `{context}` has invalid codepoint `{codepoint}`"));
+        char::from_u32(scalar)
+            .unwrap_or_else(|| panic!("Glyph manifest entry `{context}` has non-scalar codepoint `{codepoint}`"))
+    };
+    (font_family.to_string(), ch)
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ManifestDefaults {
     pub(crate) roots: Vec<PathBuf>,

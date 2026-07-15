@@ -9,6 +9,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons/tests/fixtures/basic-file-variants/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-core/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/guicons-build/benches" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-build/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-build/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-cli/src" isTestSource="false" />

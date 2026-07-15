@@ -13,7 +13,7 @@ mod paths;
 
 pub use diagnostics::ManifestError;
 pub use load::{load_icon_manifest, load_icon_manifest_or_panic};
-pub use model::{IconEntry, IconEntrySource, IconManifest, ProviderSchema};
+pub use model::{parse_glyph_spec, IconEntry, IconEntrySource, IconManifest, ProviderSchema};
 pub use naming::{rust_const_name, rust_fn_name};
 pub use parse::decompose_iconify_id;
 pub use paths::{canonicalize_or_self, find_workspace_root_from};

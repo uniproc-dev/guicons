@@ -7,8 +7,11 @@
 #[cfg(feature = "slint")]
 pub mod slint;
 
+#[cfg(feature = "iced")]
+pub mod iced;
+
 #[cfg(feature = "macros")]
-pub use guicons_macros::icon;
+pub use guicons_macros::{icon, icon_key};
 
 use std::path::PathBuf;
 
