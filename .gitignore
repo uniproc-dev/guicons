@@ -4,3 +4,8 @@ crates/guicons-build/tests/fixtures/*/target/
 *.snap.new
 crates/guicons/.cache/
 /.cache/
+ide-plugin/build/
+ide-plugin/.gradle/
+ide-plugin/.idea/
+ide-plugin/.intellijPlatform/
+ide-plugin/.kotlin/

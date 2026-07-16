@@ -329,8 +329,6 @@ pub(crate) fn generate_slint_icon_global_from_materialized(
     write_if_changed(out_file, &generated);
 }
 
-/// Avoids leaking the full (username-bearing) absolute path into the
-/// generated file's header comment.
 fn manifest_file_name(manifest_path: &Path) -> String {
     manifest_path
         .file_name()

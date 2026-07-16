@@ -34,6 +34,9 @@ fn file_uri(path: &Path) -> Url {
 
 fn write(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
     let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
     fs::write(&path, content).unwrap();
     path
 }
@@ -813,6 +816,212 @@ async fn completion_inside_an_iconify_value_caps_a_huge_collection_and_marks_it_
     assert_eq!(result["isIncomplete"], true, "500 matches exceed the cap");
     let items = result["items"].as_array().expect("completion list");
     assert!(items.len() < 500, "response should be capped, got {}", items.len());
+}
+
+/// Hovering an `icon!(family.variant)` call in a `.rs` file resolves
+/// against whatever manifest was found anywhere in the workspace at
+/// startup (`scan_workspace_manifests`) - not the `.rs` file itself,
+/// which has no manifest of its own.
+#[tokio::test]
+async fn hover_on_an_icon_macro_call_in_a_rust_file_shows_the_resolved_entry() {
+    let dir = tempdir().unwrap();
+    // `hover_rust` finds the .rs file's own manifest by locating its crate
+    // root (nearest ancestor `Cargo.toml`), matching how `guicons-macros`
+    // resolves `icon!(...)` at compile time against `CARGO_MANIFEST_DIR` -
+    // so the fixture needs a `Cargo.toml` right alongside the manifest.
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "docker.svg", "<svg/>");
+    write(dir.path(), "icons.gui.toml", "[docker]\nfile = \"docker.svg\"\n");
+    let rs_content = "fn f() { let _ = icon!(docker); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("docker").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("docker"), "{value}");
+}
+
+/// `icon!("set:name")` (a raw iconify literal) has no manifest entry at
+/// all - hover must show a distinct message rather than silently finding
+/// nothing.
+#[tokio::test]
+async fn hover_on_an_icon_macro_call_with_an_iconify_literal_shows_iconify_info() {
+    let dir = tempdir().unwrap();
+    let rs_content = "fn f() { let _ = icon!(\"mdi:home\"); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("mdi:home").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("mdi:home"), "{value}");
+    assert!(value.contains("no manifest entry"), "{value}");
+}
+
+/// A `.rs` file whose workspace has no `icons.gui.toml` at all must
+/// gracefully report no hover, not error or panic.
+#[tokio::test]
+async fn hover_on_an_icon_macro_call_with_no_manifest_in_the_workspace_is_none() {
+    let dir = tempdir().unwrap();
+    let rs_content = "fn f() { let _ = icon!(docker); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("docker").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await;
+
+    assert_eq!(result, Some(Value::Null), "{result:?}");
+}
+
+/// A `.rs` file must only ever resolve `icon!(...)` against *its own*
+/// crate's manifest - never a different crate's, even if the workspace
+/// has several and they happen to share a family name. Regression test
+/// for resolving against `self.manifests.values().find_map(...)` (any
+/// manifest that happened to match) instead of the specific
+/// `CARGO_MANIFEST_DIR`-equivalent one.
+#[tokio::test]
+async fn hover_in_a_rust_file_only_resolves_against_its_own_crates_manifest() {
+    let dir = tempdir().unwrap();
+
+    // Crate "a": its own Cargo.toml, manifest, and .rs file.
+    write(dir.path(), "a/Cargo.toml", "[package]\nname = \"a\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "a/docker.svg", "<svg/>");
+    write(dir.path(), "a/icons.gui.toml", "[docker]\nfile = \"docker.svg\"\n");
+    let rs_content = "fn f() { let _ = icon!(docker); }";
+    let rs_path = write(dir.path(), "a/src/main.rs", rs_content);
+
+    // Crate "b": a different manifest defining the *same* family name
+    // with a different source - if hover ever picked this one up instead
+    // of crate "a"'s own, this test would catch it.
+    write(dir.path(), "b/Cargo.toml", "[package]\nname = \"b\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "b/other.svg", "<svg/>");
+    write(dir.path(), "b/icons.gui.toml", "[docker]\nfile = \"other.svg\"\n");
+
+    let uri = file_uri(&rs_path);
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("docker").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+
+    let value = result["contents"]["value"].as_str().unwrap();
+    assert!(value.contains("docker.svg"), "should resolve crate a's own entry: {value}");
+    assert!(!value.contains("other.svg"), "must not pick up crate b's entry: {value}");
 }
 
 #[tokio::test]

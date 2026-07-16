@@ -1,13 +1,10 @@
+use guicons_core::selector::{classify_segments, IconSelector, PathSegment};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
 use quote::quote;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
 use syn::{parse_macro_input, Error, LitInt, LitStr, Result, Token};
-use winnow::ascii::alphanumeric1;
-use winnow::combinator::{opt, preceded, repeat};
-use winnow::token::{literal, one_of};
-use winnow::{Parser, Result as WinnowResult};
 
 #[cfg(all(feature = "slint", feature = "iced"))]
 compile_error!(
@@ -74,24 +71,6 @@ pub fn icon_key(input: TokenStream) -> TokenStream {
 struct IconMacroInput {
     selector: IconSelector,
     module: Ident,
-}
-
-/// A selector shared by `icon!` and `icon_key!`:
-/// `family`/`family.variant`/`family.size.variant`/`family.size` resolves
-/// against `icons.gui.toml` (the `size` segment is only needed when a
-/// family has the same variant at more than one size - otherwise it's
-/// redundant and can be left off); `"set:name"` (a raw iconify id)
-/// resolves through `guicons-net`'s cache with no manifest lookup.
-/// `icon!` turns either into `IconData`; `icon_key!` only supports
-/// `FamilyVariant` - there's no manifest key for a raw iconify id.
-#[derive(Clone, Debug)]
-enum IconSelector {
-    FamilyVariant {
-        family: String,
-        size: Option<u16>,
-        variant: Option<String>,
-    },
-    Iconify(String),
 }
 
 impl Parse for IconMacroInput {
@@ -284,22 +263,19 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
     }
 }
 
+/// Thin wrapper over `guicons_core::selector::parse_resource_selector` -
+/// shared with `guicons-lsp`'s hover, which parses the exact same grammar
+/// from plain scanned text rather than a `syn::LitStr`.
 fn parse_selector_literal(literal: &LitStr) -> Result<IconSelector> {
-    let value = literal.value();
-    if value.contains(':') {
-        return Ok(IconSelector::Iconify(value));
-    }
-    parse_resource_selector(&value).map_err(|message| Error::new_spanned(literal, message))
+    guicons_core::selector::parse_resource_selector(&literal.value()).map_err(|message| Error::new_spanned(literal, message))
 }
 
-/// One dot-separated segment of the path form (`family.24.filled`). `24`
-/// lexes as a `LitInt`, not an `Ident`, so this can't just be
-/// `Punctuated<Ident, Token![.]>` - each segment is read as either.
-enum PathSegment {
-    Ident(String),
-    Size(u16),
-}
-
+/// Reads the dotted-path form (`family.24.filled`) token-by-token from a
+/// `syn::ParseStream` - `24` lexes as a `LitInt`, not an `Ident`, so this
+/// can't just be `Punctuated<Ident, Token![.]>`, each segment is read as
+/// either - then delegates the actual family/size/variant grammar to the
+/// shared `classify_segments` (also used by `guicons-lsp`'s plain-text
+/// path parser, `parse_selector_path_text`).
 fn parse_selector_path(input: ParseStream<'_>) -> Result<IconSelector> {
     let mut segments = Vec::new();
     loop {
@@ -319,80 +295,7 @@ fn parse_selector_path(input: ParseStream<'_>) -> Result<IconSelector> {
             break;
         }
     }
-    classify_segments(segments)
-}
-
-/// Interprets `[family]` / `[family, variant]` / `[family, size]` /
-/// `[family, size, variant]` - a `Size` segment always comes before an
-/// `Ident` (variant) segment, matching how `default_iconify_id` builds
-/// `family-size-variant`.
-fn classify_segments(segments: Vec<PathSegment>) -> Result<IconSelector> {
-    let mut iter = segments.into_iter();
-    let Some(PathSegment::Ident(family)) = iter.next() else {
-        return Err(Error::new(
-            Span::call_site(),
-            "expected a family name, e.g. `settings` or `settings.filled`",
-        ));
-    };
-
-    let mut size = None;
-    let mut variant = None;
-    for segment in iter {
-        match segment {
-            PathSegment::Size(value) if size.is_none() && variant.is_none() => size = Some(value),
-            PathSegment::Ident(name) if variant.is_none() => variant = Some(name),
-            _ => {
-                return Err(Error::new(
-                    Span::call_site(),
-                    "expected `family`, `family.variant`, `family.size`, or `family.size.variant`",
-                ));
-            }
-        }
-    }
-
-    Ok(IconSelector::FamilyVariant { family, size, variant })
-}
-
-fn parse_resource_selector(input: &str) -> std::result::Result<IconSelector, String> {
-    let mut parser = (
-        resource_segment,
-        opt(preceded(literal("/"), resource_segment)),
-        opt(preceded(literal("/"), resource_segment)),
-    );
-    let mut input_rest = input;
-    let (family, second, third) = parser.parse_next(&mut input_rest).map_err(|_| {
-        "expected icon selector like `settings`, `settings/filled`, or `settings/24/filled`".to_string()
-    })?;
-    if !input_rest.is_empty() {
-        return Err(format!("unexpected trailing input `{input_rest}` in icon selector"));
-    }
-
-    let (size, variant) = match (second, third) {
-        (None, None) => (None, None),
-        (Some(only), None) => match only.parse::<u16>() {
-            Ok(size) => (Some(size), None),
-            Err(_) => (None, Some(only)),
-        },
-        (Some(size_segment), Some(variant)) => {
-            let size = size_segment
-                .parse::<u16>()
-                .map_err(|_| format!("expected a numeric size before the variant, got `{size_segment}`"))?;
-            (Some(size), Some(variant))
-        }
-        (None, Some(_)) => unreachable!("winnow's `opt` chain can't produce a third segment without a second"),
-    };
-
-    Ok(IconSelector::FamilyVariant { family, size, variant })
-}
-
-fn resource_segment(input: &mut &str) -> WinnowResult<String> {
-    (
-        alphanumeric1,
-        repeat::<_, _, (), _, _>(0.., (one_of(['-', '_']), alphanumeric1)),
-    )
-        .take()
-        .map(str::to_string)
-        .parse_next(input)
+    classify_segments(segments).map_err(|message| Error::new(Span::call_site(), message))
 }
 
 fn manifest_dir() -> Result<PathBuf> {
@@ -458,5 +361,27 @@ fn unknown_icon_message(
             size.map(|size| format!("/{size}")).unwrap_or_default(),
             variants.join(", ")
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse::Parser;
+
+    /// `parse_selector_path` (this crate, token-driven off a real
+    /// `syn::ParseStream`) and `guicons_core::selector::parse_selector_path_text`
+    /// (`guicons-lsp`'s plain-text equivalent) must agree on every dotted-
+    /// path selector - cheap insurance against the two entry points
+    /// drifting apart now that they're two separate tokenizers feeding
+    /// the same shared `classify_segments`.
+    #[test]
+    fn syn_and_text_path_parsers_agree_on_known_selectors() {
+        for input in ["settings", "settings.filled", "settings.24.filled", "settings.20", "nav_bar.filled"] {
+            let tokens: proc_macro2::TokenStream = input.parse().unwrap();
+            let via_syn = parse_selector_path.parse2(tokens).unwrap();
+            let via_text = guicons_core::selector::parse_selector_path_text(input).unwrap();
+            assert_eq!(via_syn, via_text, "mismatch for `{input}`");
+        }
     }
 }

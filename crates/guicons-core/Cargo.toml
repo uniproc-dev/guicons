@@ -7,6 +7,7 @@ description = "Core manifest model and parser for guicons"
 
 [dependencies]
 toml-span = "0.7"
+winnow = "0.7.13"
 
 [dev-dependencies]
 insta = "1.48.0"

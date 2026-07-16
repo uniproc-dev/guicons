@@ -201,6 +201,21 @@ pub struct Backend {
     /// syntax error twice is just noise. Semantic diagnostics (unknown
     /// field, missing file, ...) aren't affected by this flag.
     report_toml_syntax_errors: std::sync::atomic::AtomicBool,
+    /// Every `icons.gui.toml` found under the workspace root, keyed by its
+    /// canonicalized path - populated by a full scan at `initialized()`
+    /// time and kept fresh via `did_change`/`did_change_watched_files`.
+    /// Needed for `.rs`-side hover: unlike a `.gui.toml` document (which
+    /// *is* the manifest it's diagnosed against), a `.rs` file has no
+    /// manifest of its own - `hover_rust` looks up this file's own crate's
+    /// entry by key (see there for why "own crate's", not "any manifest
+    /// found").
+    manifests: RwLock<HashMap<PathBuf, IconManifest>>,
+    /// Extra directory names to skip during the manifest scan, on top of
+    /// `DEFAULT_SKIP_DIRS` - configurable via `initializationOptions:
+    /// { "manifestScanIgnoreDirs": [...] }` for whatever a given
+    /// workspace's own build/tooling directories `DEFAULT_SKIP_DIRS`
+    /// doesn't already cover.
+    extra_skip_dirs: RwLock<Vec<String>>,
 }
 
 /// Constructs the `tower_lsp` service pair (server-side handle + client
@@ -212,7 +227,69 @@ pub fn service() -> (LspService<Backend>, ClientSocket) {
         documents: RwLock::new(HashMap::new()),
         workspace_root: RwLock::new(None),
         report_toml_syntax_errors: std::sync::atomic::AtomicBool::new(false),
+        manifests: RwLock::new(HashMap::new()),
+        extra_skip_dirs: RwLock::new(Vec::new()),
     })
+}
+
+/// Directory names never worth descending into during a manifest scan -
+/// build output, VCS internals, and dependency/package-manager caches
+/// from the ecosystems a `guicons`-using project is realistically likely
+/// to sit next to. Extendable per-workspace via `initializationOptions:
+/// { "manifestScanIgnoreDirs": [...] }` (see `Backend::extra_skip_dirs`)
+/// rather than edited here, for anything this list doesn't cover.
+const DEFAULT_SKIP_DIRS: &[&str] = &[
+    "target",
+    ".git",
+    ".hg",
+    ".svn",
+    ".cache",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    "out",
+    "bin",
+    "obj",
+    ".idea",
+    ".vscode",
+    ".vs",
+    "venv",
+    ".venv",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".terraform",
+    ".gradle",
+];
+
+/// Recursively finds every `icons.gui.toml` under `root` - `[link]`d
+/// files aren't collected separately, since `load_icon_manifest` already
+/// pulls those in as part of loading the root manifest that references
+/// them. Skips `DEFAULT_SKIP_DIRS` plus whatever `extra_skip_dirs` the
+/// client configured.
+fn find_manifest_files(root: &Path, extra_skip_dirs: &[String]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = std::fs::read_dir(&dir) else { continue };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
+            if is_dir {
+                let name = entry.file_name();
+                let skipped = DEFAULT_SKIP_DIRS.iter().any(|skip| name == std::ffi::OsStr::new(skip))
+                    || extra_skip_dirs.iter().any(|skip| name == std::ffi::OsStr::new(skip.as_str()));
+                if !skipped {
+                    stack.push(path);
+                }
+            } else if entry.file_name() == std::ffi::OsStr::new("icons.gui.toml") {
+                found.push(path);
+            }
+        }
+    }
+    found
 }
 
 impl Backend {
@@ -270,6 +347,93 @@ impl Backend {
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
 
+    /// Rescans the workspace for `icons.gui.toml` files and replaces the
+    /// whole `manifests` table - cheap enough (a local directory walk plus
+    /// parsing) to just redo wholesale rather than track individual
+    /// additions/removals.
+    async fn scan_workspace_manifests(&self, workspace_root: &Path) {
+        let extra_skip_dirs = self.extra_skip_dirs.read().await.clone();
+        let mut manifests = HashMap::new();
+        for manifest_path in find_manifest_files(workspace_root, &extra_skip_dirs) {
+            let (manifest, _) = guicons_core::load_icon_manifest(&manifest_path);
+            manifests.insert(guicons_core::canonicalize_or_self(&manifest_path), manifest);
+        }
+        *self.manifests.write().await = manifests;
+    }
+
+    /// Keeps `manifests` in sync with an open `.gui.toml` document's live
+    /// buffer content (not just what's on disk) - mirrors how
+    /// `publish_diagnostics_for` already treats the open document as the
+    /// source of truth over the file on disk.
+    async fn refresh_manifest_if_relevant(&self, path: &Path, text: &str) {
+        if path.file_name() != Some(std::ffi::OsStr::new("icons.gui.toml")) {
+            return;
+        }
+        let (manifest, _) = guicons_core::load_icon_manifest_from_str(path, text);
+        self.manifests.write().await.insert(path.to_path_buf(), manifest);
+    }
+
+    /// Hover for `icon!`/`icon_key!`/`icon_data!` call sites in a `.rs`
+    /// document - the Rust-side counterpart to the TOML `hover()` body.
+    /// Unlike a `.gui.toml` document, a `.rs` file has no manifest of its
+    /// own - but it does belong to a specific *crate*, and that's exactly
+    /// what picks the manifest: `guicons-macros` itself resolves
+    /// `icon!(...)` at compile time against `CARGO_MANIFEST_DIR/icons.gui.toml`
+    /// (the crate root, not the cargo *workspace* root - a distinction
+    /// `find_workspace_root_from` already embodies, since it stops at the
+    /// nearest ancestor `Cargo.toml` rather than climbing to one with
+    /// `[workspace]`). In a multi-crate workspace, a `.rs` file must only
+    /// ever resolve against *its own* crate's manifest - never some other
+    /// crate's, even if one happens to be sitting in `self.manifests`.
+    async fn hover_rust(&self, path: &Path, uri: &Url, position: Position) -> Result<Option<Hover>> {
+        let Some(text) = self.document_text(uri).await else { return Ok(None) };
+        let index = LineIndex::new(&text);
+        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
+
+        let Some(site) = guicons_core::rust_macro::macro_call_at(&text, offset) else { return Ok(None) };
+        let Ok(selector) = guicons_core::selector::parse_selector(&site.arg_text) else { return Ok(None) };
+        let range = Some(index.range(&text, site.arg_range));
+
+        match selector {
+            guicons_core::selector::IconSelector::Iconify(id) => Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: format!(
+                        "**{id}** - raw iconify id, resolved directly through `guicons-net`'s cache - no manifest entry for this one"
+                    ),
+                }),
+                range,
+            })),
+            guicons_core::selector::IconSelector::FamilyVariant { family, size, variant } => {
+                let Some(crate_root) = path.parent().and_then(guicons_core::find_workspace_root_from) else {
+                    return Ok(None);
+                };
+                let manifest_path = guicons_core::canonicalize_or_self(&crate_root.join("icons.gui.toml"));
+
+                let manifests = self.manifests.read().await;
+                let Some(manifest) = manifests.get(&manifest_path) else { return Ok(None) };
+                let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
+                    return Ok(None);
+                };
+
+                let mut lines = vec![format!("**{}**", entry.key())];
+                lines.push(format!("- family: `{}`", entry.family()));
+                if let Some(variant) = entry.variant() {
+                    lines.push(format!("- variant: `{variant}`"));
+                }
+                if let Some(size) = entry.size() {
+                    lines.push(format!("- size: `{size}`"));
+                }
+                lines.push(format!("- source: {}", describe_source(entry.source(), manifest)));
+
+                Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: lines.join("\n") }),
+                    range,
+                }))
+            }
+        }
+    }
+
     /// Warms the cache for any provider this manifest declares that isn't
     /// already one of the builtins warmed at startup - builtins are known
     /// statically, but a manifest's own `[providers.<name>]` entries only
@@ -312,6 +476,15 @@ impl LanguageServer for Backend {
             .and_then(serde_json::Value::as_bool)
         {
             self.report_toml_syntax_errors.store(report, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        if let Some(extra_dirs) = params
+            .initialization_options
+            .as_ref()
+            .and_then(|options| options.get("manifestScanIgnoreDirs"))
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value.clone()).ok())
+        {
+            *self.extra_skip_dirs.write().await = extra_dirs;
         }
 
         Ok(InitializeResult {
@@ -357,7 +530,8 @@ impl LanguageServer for Backend {
         // already, so `completion()` never has to touch the network.
         if let Some(workspace_root) = self.workspace_root().await {
             let providers: Vec<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
-            iconify_completion::warm_provider_caches(self.client.clone(), workspace_root, providers);
+            iconify_completion::warm_provider_caches(self.client.clone(), workspace_root.clone(), providers);
+            self.scan_workspace_manifests(&workspace_root).await;
         }
     }
 
@@ -368,6 +542,11 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.set_document_text(params.text_document.uri.clone(), params.text_document.text).await;
         self.warm_custom_providers(&params.text_document.uri).await;
+        if let Some(path) = Self::path_for_uri(&params.text_document.uri) {
+            if let Some(text) = self.document_text(&params.text_document.uri).await {
+                self.refresh_manifest_if_relevant(&path, &text).await;
+            }
+        }
         self.publish_diagnostics_for(params.text_document.uri).await;
     }
 
@@ -376,6 +555,11 @@ impl LanguageServer for Backend {
             self.set_document_text(params.text_document.uri.clone(), change.text).await;
         }
         self.warm_custom_providers(&params.text_document.uri).await;
+        if let Some(path) = Self::path_for_uri(&params.text_document.uri) {
+            if let Some(text) = self.document_text(&params.text_document.uri).await {
+                self.refresh_manifest_if_relevant(&path, &text).await;
+            }
+        }
         self.publish_diagnostics_for(params.text_document.uri).await;
     }
 
@@ -388,6 +572,9 @@ impl LanguageServer for Backend {
         for uri in uris {
             self.publish_diagnostics_for(uri).await;
         }
+        if let Some(workspace_root) = self.workspace_root().await {
+            self.scan_workspace_manifests(&workspace_root).await;
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -395,6 +582,9 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params.position;
 
         let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            return self.hover_rust(&path, &uri, position).await;
+        }
         let Some(text) = self.document_text(&uri).await else { return Ok(None) };
         let index = LineIndex::new(&text);
         let Some(offset) = index.offset(&text, position) else { return Ok(None) };
@@ -747,6 +937,33 @@ mod tests {
             unresolved_iconify_diagnostics(content, &guicons_core::canonicalize_or_self(&path), &manifest, &index);
 
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn find_manifest_files_skips_default_noise_directories() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("icons.gui.toml"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/some-package")).unwrap();
+        std::fs::write(dir.path().join("node_modules/some-package/icons.gui.toml"), "").unwrap();
+
+        let found = find_manifest_files(dir.path(), &[]);
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0], dir.path().join("icons.gui.toml"));
+    }
+
+    #[test]
+    fn find_manifest_files_also_skips_configured_extra_directories() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("icons.gui.toml"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("vendored")).unwrap();
+        std::fs::write(dir.path().join("vendored/icons.gui.toml"), "").unwrap();
+
+        let found_without_config = find_manifest_files(dir.path(), &[]);
+        assert_eq!(found_without_config.len(), 2, "{found_without_config:?}");
+
+        let found_with_config = find_manifest_files(dir.path(), &["vendored".to_string()]);
+        assert_eq!(found_with_config, vec![dir.path().join("icons.gui.toml")]);
     }
 
     #[test]

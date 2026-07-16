@@ -1,0 +1,21 @@
+<idea-plugin>
+    <id>dev.guicons.idea-plugin</id>
+    <name>guicons</name>
+    <vendor>guicons</vendor>
+
+    <description><![CDATA[
+        Native icon preview for guicons' <code>icon!</code>/<code>icon_key!</code>/<code>icon_data!</code>
+        macro calls - shows the resolved icon directly in the Quick Documentation
+        popup (Ctrl+Q / F1), instead of just a text description like the LSP's
+        own hover already provides.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.jetbrains.rust</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <lang.documentationProvider
+            language="Rust"
+            implementationClass="dev.guicons.ideaplugin.GuiconsDocumentationProvider"/>
+    </extensions>
+</idea-plugin>
