@@ -47,6 +47,18 @@ fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String 
     }
 }
 
+/// Hover text for a raw `"provider:name"` iconify literal in a `.rs`
+/// `icon!(...)` call - links out to the icon's own page on Iconify's
+/// site (where it can actually be looked at) rather than just restating
+/// that it's an iconify id, which is already visible from the call site
+/// itself and tells the reader nothing new.
+fn iconify_literal_hover(id: &str) -> String {
+    match id.split_once(':') {
+        Some((prefix, name)) => format!("**{id}** - [view on Iconify](https://icon-sets.iconify.design/{prefix}/{name}/)"),
+        None => format!("**{id}** - not in `provider:name` form, will never resolve"),
+    }
+}
+
 /// Whether a manifest error should be published, given the
 /// `reportTomlSyntaxErrors` setting - only raw TOML syntax errors are
 /// ever suppressed, never semantic ones (unknown field, missing source, ...).
@@ -315,6 +327,30 @@ impl Backend {
         self.documents.read().await.get(uri).cloned()
     }
 
+    /// Falls back to reading `path` from disk when it isn't an open,
+    /// tracked document - needed for jumping *into* a manifest file the
+    /// user hasn't opened themselves (goto-definition from a `.rs`
+    /// `icon!(...)` call), unlike every other place this server reads a
+    /// document's text, which only ever needs the currently-open one.
+    async fn document_text_or_disk(&self, uri: &Url, path: &Path) -> Option<String> {
+        if let Some(text) = self.document_text(uri).await {
+            return Some(text);
+        }
+        std::fs::read_to_string(path).ok()
+    }
+
+    /// Resolves the `icons.gui.toml` governing `.rs` file `path` (its own
+    /// crate's manifest - see `hover_rust`'s doc comment for why not "any
+    /// manifest lying around") and returns a clone of it, if known.
+    /// Cloning (not holding the `RwLock` read guard across `.await`
+    /// points in callers) is cheap enough here - manifests are typically
+    /// small, and this only runs on interactive requests, not hot paths.
+    async fn manifest_for_rust_file(&self, path: &Path) -> Option<IconManifest> {
+        let crate_root = path.parent().and_then(guicons_core::find_workspace_root_from)?;
+        let manifest_path = guicons_core::canonicalize_or_self(&crate_root.join("icons.gui.toml"));
+        self.manifests.read().await.get(&manifest_path).cloned()
+    }
+
     async fn set_document_text(&self, uri: Url, text: String) {
         self.documents.write().await.insert(uri, text);
     }
@@ -398,20 +434,12 @@ impl Backend {
             guicons_core::selector::IconSelector::Iconify(id) => Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
-                    value: format!(
-                        "**{id}** - raw iconify id, resolved directly through `guicons-net`'s cache - no manifest entry for this one"
-                    ),
+                    value: iconify_literal_hover(&id),
                 }),
                 range,
             })),
             guicons_core::selector::IconSelector::FamilyVariant { family, size, variant } => {
-                let Some(crate_root) = path.parent().and_then(guicons_core::find_workspace_root_from) else {
-                    return Ok(None);
-                };
-                let manifest_path = guicons_core::canonicalize_or_self(&crate_root.join("icons.gui.toml"));
-
-                let manifests = self.manifests.read().await;
-                let Some(manifest) = manifests.get(&manifest_path) else { return Ok(None) };
+                let Some(manifest) = self.manifest_for_rust_file(path).await else { return Ok(None) };
                 let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
                     return Ok(None);
                 };
@@ -424,7 +452,7 @@ impl Backend {
                 if let Some(size) = entry.size() {
                     lines.push(format!("- size: `{size}`"));
                 }
-                lines.push(format!("- source: {}", describe_source(entry.source(), manifest)));
+                lines.push(format!("- source: {}", describe_source(entry.source(), &manifest)));
 
                 Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: lines.join("\n") }),
@@ -432,6 +460,45 @@ impl Backend {
                 }))
             }
         }
+    }
+
+    /// Goto-definition for `icon!`/`icon_key!`/`icon_data!` call sites in
+    /// a `.rs` document - jumps to the entry's declaration in
+    /// `icons.gui.toml` (or one of its `[link]`d files - `entry.file()`
+    /// already tracks exactly which one, same as the TOML-side
+    /// `goto_definition` body relies on). Nothing to jump to for a raw
+    /// iconify literal - there's no manifest declaration for one.
+    async fn goto_definition_rust(
+        &self,
+        path: &Path,
+        uri: &Url,
+        position: Position,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let Some(text) = self.document_text(uri).await else { return Ok(None) };
+        let index = LineIndex::new(&text);
+        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
+
+        let Some(site) = guicons_core::rust_macro::macro_call_at(&text, offset) else { return Ok(None) };
+        let Ok(guicons_core::selector::IconSelector::FamilyVariant { family, size, variant }) =
+            guicons_core::selector::parse_selector(&site.arg_text)
+        else {
+            return Ok(None);
+        };
+
+        let Some(manifest) = self.manifest_for_rust_file(path).await else { return Ok(None) };
+        let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
+            return Ok(None);
+        };
+
+        let entry_file = entry.file().to_path_buf();
+        let entry_span = entry.span();
+        let Ok(target_uri) = Url::from_file_path(&entry_file) else { return Ok(None) };
+
+        let Some(entry_text) = self.document_text_or_disk(&target_uri, &entry_file).await else { return Ok(None) };
+        let entry_index = LineIndex::new(&entry_text);
+        let range = entry_index.range(&entry_text, entry_span);
+
+        Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, range))))
     }
 
     /// Warms the cache for any provider this manifest declares that isn't
@@ -677,6 +744,9 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params.position;
 
         let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
+        if path.extension().is_some_and(|ext| ext == "rs") {
+            return self.goto_definition_rust(&path, &uri, position).await;
+        }
         let Some(text) = self.document_text(&uri).await else { return Ok(None) };
         let index = LineIndex::new(&text);
         let Some(offset) = index.offset(&text, position) else { return Ok(None) };
@@ -971,6 +1041,20 @@ mod tests {
         assert_eq!(levenshtein("docker", "docker"), 0);
         assert_eq!(levenshtein("docker", "dokcer"), 2);
         assert_eq!(levenshtein("", "abc"), 3);
+    }
+
+    #[test]
+    fn iconify_literal_hover_links_to_the_icon_on_iconifys_own_site() {
+        let value = iconify_literal_hover("mdi:home");
+        assert!(value.contains("mdi:home"), "{value}");
+        assert!(value.contains("https://icon-sets.iconify.design/mdi/home/"), "{value}");
+    }
+
+    #[test]
+    fn iconify_literal_hover_flags_a_malformed_id_without_a_broken_link() {
+        let value = iconify_literal_hover("no-colon-here");
+        assert!(!value.contains("icon-sets.iconify.design"), "{value}");
+        assert!(value.contains("will never resolve"), "{value}");
     }
 
     #[test]

@@ -916,7 +916,7 @@ async fn hover_on_an_icon_macro_call_with_an_iconify_literal_shows_iconify_info(
 
     let value = result["contents"]["value"].as_str().unwrap();
     assert!(value.contains("mdi:home"), "{value}");
-    assert!(value.contains("no manifest entry"), "{value}");
+    assert!(value.contains("https://icon-sets.iconify.design/mdi/home/"), "{value}");
 }
 
 /// A `.rs` file whose workspace has no `icons.gui.toml` at all must
@@ -951,6 +951,111 @@ async fn hover_on_an_icon_macro_call_with_no_manifest_in_the_workspace_is_none()
     let result = call(
         &mut service,
         "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await;
+
+    assert_eq!(result, Some(Value::Null), "{result:?}");
+}
+
+/// Goto-definition on an `icon!(family.variant)` call in a `.rs` file
+/// jumps into the manifest, at the entry's own declaration - not just to
+/// the top of the file (the TOML-side goto-definition targets a real
+/// span already; this asserts the `.rs` side reuses the same precision).
+#[tokio::test]
+async fn goto_definition_on_an_icon_macro_call_jumps_to_the_manifest_entry() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "docker.svg", "<svg/>");
+    let manifest_content = "[docker]\nfile = \"docker.svg\"\n";
+    write(dir.path(), "icons.gui.toml", manifest_content);
+    let rs_content = "fn f() { let _ = icon!(docker); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("docker").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/definition",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": offset }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("definition response");
+
+    let target = result["uri"].as_str().expect("scalar location");
+    let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
+    assert_eq!(
+        fs::canonicalize(target_path).unwrap(),
+        fs::canonicalize(dir.path().join("icons.gui.toml")).unwrap()
+    );
+    // Should point at the entry's own span (covering `file = "docker.svg"`
+    // on line 1) - not the degenerate {0,0}-{0,0} placeholder other
+    // goto-definition branches fall back to when they only know "jump to
+    // this file", not a specific location within it.
+    let range = &result["range"];
+    assert_eq!(range["start"]["line"], 1, "{range:?}");
+    assert_ne!(range["start"], range["end"], "should be a real span, not a degenerate point: {range:?}");
+}
+
+/// `icon!("set:name")` (a raw iconify literal) has no manifest
+/// declaration to jump to - must gracefully report nothing.
+#[tokio::test]
+async fn goto_definition_on_an_iconify_literal_is_none() {
+    let dir = tempdir().unwrap();
+    let rs_content = "fn f() { let _ = icon!(\"mdi:home\"); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": "rust", "version": 1, "text": rs_content }
+        })),
+        None,
+    )
+    .await;
+
+    let offset = rs_content.find("mdi:home").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/definition",
         Some(json!({
             "textDocument": { "uri": uri },
             "position": { "line": 0, "character": offset }
