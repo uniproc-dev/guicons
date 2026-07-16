@@ -6,7 +6,6 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-macros/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/crates/guicons/tests/fixtures/basic-file-variants/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-core/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-build/benches" isTestSource="true" />
@@ -20,7 +19,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-net/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/guicons-build/tests/fixtures/basic-file-variants/src" isTestSource="false" />
-      <excludeFolder url="file://$MODULE_DIR$/crates/guicons/tests/fixtures/basic-file-variants/target" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/guicons-ffi/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/crates/guicons-build/tests/fixtures/basic-file-variants/target" />
     </content>
