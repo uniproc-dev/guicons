@@ -22,6 +22,13 @@
              see GuiconsPsiDocumentationTargetProvider's doc comment for why. -->
         <platform.backend.documentation.psiTargetProvider
             implementation="dev.guicons.ideaplugin.GuiconsPsiDocumentationTargetProvider"/>
+        <!-- Registered statically (not created on the fly by pinning a
+             popup) so it's a permanent icon in the sidebar's tool window
+             bar, always available - see IconBrowserToolWindowFactory. -->
+        <toolWindow id="Guicons Icons"
+                    anchor="right"
+                    icon="/META-INF/pluginIcon.svg"
+                    factoryClass="dev.guicons.ideaplugin.IconBrowserToolWindowFactory"/>
     </extensions>
 
     <actions>

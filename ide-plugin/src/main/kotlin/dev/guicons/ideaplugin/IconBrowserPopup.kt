@@ -6,13 +6,13 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.wm.ToolWindowAnchor
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.JBColor
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.SearchTextField
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTabbedPane
+import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
@@ -87,32 +87,49 @@ class IconBrowserPopup(private val project: Project, private val editor: Editor,
     }
 
     /** A floating popup is wide and short - tree left, preview right
-     * makes sense there. A pinned sidebar tool window is the opposite
-     * (narrow and tall), so it gets its own tab instances built with a
-     * vertical split instead (preview on top, tree below) - not just the
-     * same components with the splitter's orientation flipped, since the
+     * makes sense there. The sidebar tool window is the opposite (narrow
+     * and tall), so pinning builds a fresh set of tabs with a vertical
+     * split instead (preview on top, tree below) - not just the same
+     * components with the splitter's orientation flipped, since the
      * width/height a `JBSplitter` is built for isn't something you
-     * re-decide after the fact without rebuilding its children's layout. */
+     * re-decide after the fact without rebuilding its children's layout.
+     *
+     * The tool window itself is registered statically (`plugin.xml`'s
+     * `<toolWindow>`, see [IconBrowserToolWindowFactory]) so it's a
+     * permanent icon in the sidebar, not something that only exists after
+     * a pin - this just replaces its content with tabs bound to *this*
+     * popup's editor/file and shows it, overriding whatever the factory's
+     * own "currently active .rs file" content had before. */
     private fun pinToToolWindow() {
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return
+        val content = toolWindow.contentManager.contents.firstOrNull()
         val sidebarTabs = buildTabs(vertical = true)
-        val manager = ToolWindowManager.getInstance(project)
-        manager.getToolWindow(TOOL_WINDOW_ID)?.let { manager.unregisterToolWindow(TOOL_WINDOW_ID) }
-        val toolWindow = manager.registerToolWindow(TOOL_WINDOW_ID, sidebarTabs, ToolWindowAnchor.RIGHT)
+        if (content != null) {
+            content.component = sidebarTabs
+        } else {
+            toolWindow.contentManager.addContent(ContentFactory.getInstance().createContent(sidebarTabs, null, false))
+        }
         toolWindow.show()
     }
 
-    private fun buildTabs(vertical: Boolean): JBTabbedPane {
-        val tabs = JBTabbedPane()
-        val manifestTab = ManifestTab(project, editor, rustFilePath, vertical)
-        val iconifyTab = IconifyTab(project, editor, rustFilePath, vertical)
-        tabs.addTab("Manifest", manifestTab.component)
-        tabs.addTab("Iconify", iconifyTab.component)
-        return tabs
-    }
+    private fun buildTabs(vertical: Boolean): JBTabbedPane = buildIconBrowserTabs(project, editor, rustFilePath, vertical)
 
     companion object {
-        private const val TOOL_WINDOW_ID = "Guicons Icons"
+        const val TOOL_WINDOW_ID = "Guicons Icons"
     }
+}
+
+/** Shared between [IconBrowserPopup] (both the floating popup and its
+ * pin-to-sidebar path) and [IconBrowserToolWindowFactory] (the tool
+ * window's own "currently active .rs file" content) - same two tabs
+ * either way, just built for whichever editor/file is relevant. */
+fun buildIconBrowserTabs(project: Project, editor: Editor, rustFilePath: String, vertical: Boolean): JBTabbedPane {
+    val tabs = JBTabbedPane()
+    val manifestTab = ManifestTab(project, editor, rustFilePath, vertical)
+    val iconifyTab = IconifyTab(project, editor, rustFilePath, vertical)
+    tabs.addTab("Manifest", manifestTab.component)
+    tabs.addTab("Iconify", iconifyTab.component)
+    return tabs
 }
 
 /** One node's payload in either tab's tree - a group (manifest file /
