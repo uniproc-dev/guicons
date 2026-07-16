@@ -17,7 +17,7 @@ uniffi::setup_scaffolding!();
 use guicons_core::rust_macro::MacroKind as CoreMacroKind;
 use guicons_core::selector::IconSelector as CoreIconSelector;
 use guicons_core::IconEntrySource;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(uniffi::Enum)]
 pub enum MacroKind {
@@ -86,22 +86,12 @@ pub fn parse_selector(raw: String) -> Option<IconSelector> {
     guicons_core::selector::parse_selector(&raw).ok().map(Into::into)
 }
 
-/// Walks up from `rust_file_path`'s directory to the nearest `Cargo.toml`
-/// (the crate root - the same convention `guicons-macros`' own
-/// `CARGO_MANIFEST_DIR` and `guicons-lsp`'s crate-scoped manifest lookup
-/// both use), then returns `<that dir>/icons.gui.toml` if it exists
-/// there. `None` either way if no such manifest can be found - callers
-/// must not fall back to searching anywhere else, or a `.rs` file in one
-/// crate of a multi-crate workspace could resolve against a different
-/// crate's manifest (a real bug, already fixed once in `guicons-lsp` -
-/// see its `hover_rust` doc comment).
+/// See `guicons_core::manifest_path_for_rust_file` - this is a thin
+/// UniFFI-string wrapper over it, shared with `guicons-lsp`'s own
+/// crate-scoped manifest lookup so the two can't drift apart.
 #[uniffi::export]
 pub fn find_manifest_for_rust_file(rust_file_path: String) -> Option<String> {
-    let rust_file = PathBuf::from(rust_file_path);
-    let start = rust_file.parent()?;
-    let crate_root = guicons_core::find_workspace_root_from(start)?;
-    let manifest = crate_root.join("icons.gui.toml");
-    manifest.is_file().then(|| manifest.to_string_lossy().into_owned())
+    guicons_core::manifest_path_for_rust_file(Path::new(&rust_file_path)).map(|path| path.to_string_lossy().into_owned())
 }
 
 #[derive(uniffi::Record)]
@@ -121,20 +111,37 @@ pub struct ResolvedEntry {
     pub source_file: Option<String>,
 }
 
+#[derive(uniffi::Enum)]
+pub enum ResolveOutcome {
+    Found(ResolvedEntry),
+    NotFound,
+    /// The manifest itself failed to load (syntax/schema errors) - distinct
+    /// from `NotFound` so a caller can tell "your `icon!` call has a typo"
+    /// apart from "your `icons.gui.toml` is broken", which would otherwise
+    /// both look like a missing entry.
+    ManifestInvalid { errors: Vec<String> },
+}
+
 /// Loads `manifest_path` and looks up the entry matching
-/// `family`/`size`/`variant` - `None` if the manifest fails to load at
-/// all, or no matching entry exists. Manifest errors are otherwise
-/// swallowed here (not surfaced to the caller) - this is a best-effort
-/// preview lookup, not a validator; use `icons check` for that.
+/// `family`/`size`/`variant`. A manifest that fails to load at all
+/// surfaces as `ManifestInvalid`, not silently as `NotFound` - this is a
+/// best-effort preview lookup, not a validator; use `icons check` for the
+/// full diagnostic list.
 #[uniffi::export]
 pub fn resolve_family_variant(
     manifest_path: String,
     family: String,
     size: Option<u16>,
     variant: Option<String>,
-) -> Option<ResolvedEntry> {
-    let (manifest, _errors) = guicons_core::load_icon_manifest(Path::new(&manifest_path));
-    let entry = manifest.entry_for_family_variant(&family, size, variant.as_deref())?;
+) -> ResolveOutcome {
+    let (manifest, errors) = guicons_core::load_icon_manifest(Path::new(&manifest_path));
+    if !errors.is_empty() {
+        return ResolveOutcome::ManifestInvalid { errors: errors.iter().map(ToString::to_string).collect() };
+    }
+
+    let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
+        return ResolveOutcome::NotFound;
+    };
 
     let (source_description, source_file) = match entry.source() {
         IconEntrySource::File(path) => {
@@ -145,7 +152,7 @@ pub fn resolve_family_variant(
         IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None),
     };
 
-    Some(ResolvedEntry {
+    ResolveOutcome::Found(ResolvedEntry {
         key: entry.key().to_string(),
         family: entry.family().to_string(),
         size: entry.size(),
@@ -158,6 +165,7 @@ pub fn resolve_family_variant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn macro_call_at_finds_a_dotted_path_call() {
@@ -214,11 +222,23 @@ mod tests {
         let manifest_path = dir.path().join("icons.gui.toml");
         std::fs::write(&manifest_path, "[docker]\nfile = \"docker.svg\"\n").unwrap();
 
-        let entry = resolve_family_variant(manifest_path.to_string_lossy().into_owned(), "docker".to_string(), None, None)
-            .expect("a resolved entry");
+        let outcome = resolve_family_variant(manifest_path.to_string_lossy().into_owned(), "docker".to_string(), None, None);
 
+        let ResolveOutcome::Found(entry) = outcome else { panic!("expected Found, got a different outcome") };
         assert_eq!(entry.key, "docker");
         assert!(entry.source_description.contains("docker.svg"));
         assert!(entry.source_file.is_some());
+    }
+
+    #[test]
+    fn resolve_family_variant_reports_manifest_invalid_for_a_broken_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("icons.gui.toml");
+        std::fs::write(&manifest_path, "[docker\nfile = \"docker.svg\"\n").unwrap();
+
+        let outcome = resolve_family_variant(manifest_path.to_string_lossy().into_owned(), "docker".to_string(), None, None);
+
+        let ResolveOutcome::ManifestInvalid { errors } = outcome else { panic!("expected ManifestInvalid, got a different outcome") };
+        assert!(!errors.is_empty());
     }
 }

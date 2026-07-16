@@ -38,3 +38,18 @@ pub fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
         current = current.parent()?.to_path_buf();
     }
 }
+
+/// The `icons.gui.toml` governing `rust_file` - its own crate's manifest
+/// (via `find_workspace_root_from`, which stops at the nearest ancestor
+/// `Cargo.toml` rather than climbing to a cargo *workspace* root), not
+/// any manifest that happens to exist elsewhere. In a multi-crate
+/// workspace, a `.rs` file must only ever resolve against its own
+/// crate's manifest - never a different crate's, even if one is sitting
+/// right next to it (a real bug once, in `guicons-lsp`'s hover).
+/// `None` if there's no `Cargo.toml` above `rust_file`, or no
+/// `icons.gui.toml` beside it.
+pub fn manifest_path_for_rust_file(rust_file: &Path) -> Option<PathBuf> {
+    let crate_root = find_workspace_root_from(rust_file.parent()?)?;
+    let manifest = crate_root.join("icons.gui.toml");
+    manifest.is_file().then_some(manifest)
+}

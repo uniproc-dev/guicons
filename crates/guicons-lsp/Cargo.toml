@@ -15,6 +15,7 @@ guicons-net = { path = "../guicons-net" }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 serde_json = "1"
+walkdir = "2.5.0"
 
 [dev-dependencies]
 tempfile = "3.23.0"

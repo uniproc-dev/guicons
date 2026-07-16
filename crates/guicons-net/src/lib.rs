@@ -25,9 +25,7 @@ impl fmt::Display for DownloadError {
 impl std::error::Error for DownloadError {}
 
 pub fn iconify_cache_path(start: &Path, id: &str) -> PathBuf {
-    let (provider, name) = id
-        .split_once(':')
-        .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"));
+    let (provider, name) = split_iconify_id(id);
     workspace_cache_dir(start).join(provider).join(format!("{name}.svg"))
 }
 
@@ -68,10 +66,13 @@ pub fn download(url: &str, dest: &Path) -> Result<(), DownloadError> {
 }
 
 pub fn iconify_url(id: &str) -> String {
-    let (set, name) = id
-        .split_once(':')
-        .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"));
+    let (set, name) = split_iconify_id(id);
     format!("https://api.iconify.design/{set}/{name}.svg")
+}
+
+fn split_iconify_id(id: &str) -> (&str, &str) {
+    id.split_once(':')
+        .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"))
 }
 
 fn workspace_cache_dir(start: &Path) -> PathBuf {
@@ -82,6 +83,5 @@ fn workspace_cache_dir(start: &Path) -> PathBuf {
 }
 
 fn sha256_hex(input: &str) -> String {
-    let digest = Sha256::digest(input.as_bytes());
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    hex::encode(Sha256::digest(input.as_bytes()))
 }

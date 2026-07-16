@@ -3,6 +3,7 @@ package dev.guicons.ideaplugin
 import com.intellij.lang.documentation.AbstractDocumentationProvider
 import com.intellij.psi.PsiElement
 import uniffi.guicons_ffi.IconSelector
+import uniffi.guicons_ffi.ResolveOutcome
 import uniffi.guicons_ffi.findManifestForRustFile
 import uniffi.guicons_ffi.macroCallAt
 import uniffi.guicons_ffi.parseSelector
@@ -54,14 +55,22 @@ class GuiconsDocumentationProvider : AbstractDocumentationProvider() {
         val manifestPath = findManifestForRustFile(rustFile.path)
             ?: return "<b>$key</b><br/>no icons.gui.toml found for this crate"
 
-        val entry = resolveFamilyVariant(manifestPath, selector.family, selector.size, selector.variant)
-            ?: return "<b>$key</b><br/>not found in ${File(manifestPath).name}"
+        return when (val outcome = resolveFamilyVariant(manifestPath, selector.family, selector.size, selector.variant)) {
+            is ResolveOutcome.NotFound -> "<b>$key</b><br/>not found in ${File(manifestPath).name}"
 
-        return buildString {
-            append("<b>").append(entry.key).append("</b><br/>")
-            append("source: ").append(entry.sourceDescription).append("<br/>")
-            val preview = entry.sourceFile?.let { renderPreview(File(it)) }
-            append(preview ?: "(preview unavailable - iconify/url/glyph sources aren't rendered yet)")
+            is ResolveOutcome.ManifestInvalid -> buildString {
+                append("<b>").append(key).append("</b><br/>")
+                append(File(manifestPath).name).append(" failed to load:<br/>")
+                outcome.errors.forEach { append(it).append("<br/>") }
+            }
+
+            is ResolveOutcome.Found -> buildString {
+                val entry = outcome.v1
+                append("<b>").append(entry.key).append("</b><br/>")
+                append("source: ").append(entry.sourceDescription).append("<br/>")
+                val preview = entry.sourceFile?.let { renderPreview(File(it)) }
+                append(preview ?: "(preview unavailable - iconify/url/glyph sources aren't rendered yet)")
+            }
         }
     }
 

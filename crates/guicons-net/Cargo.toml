@@ -7,5 +7,6 @@ description = "Icon cache resolution and network fetch for guicons"
 
 [dependencies]
 guicons-core = { path = "../guicons-core" }
+hex = "0.4.3"
 sha2 = "0.10.9"
 ureq = "2.12.1"

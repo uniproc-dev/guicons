@@ -879,7 +879,7 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
-    if (lib.uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file() != 47611.toShort()) {
+    if (lib.uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file() != 17306.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_macro_call_at() != 10220.toShort()) {
@@ -888,7 +888,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_guicons_ffi_checksum_func_parse_selector() != 27794.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_guicons_ffi_checksum_func_resolve_family_variant() != 25827.toShort()) {
+    if (lib.uniffi_guicons_ffi_checksum_func_resolve_family_variant() != 2360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1258,6 +1258,96 @@ public object FfiConverterTypeMacroKind: FfiConverterRustBuffer<MacroKind> {
 
 
 
+sealed class ResolveOutcome {
+    
+    data class Found(
+        val v1: ResolvedEntry) : ResolveOutcome() {
+        companion object
+    }
+    
+    object NotFound : ResolveOutcome()
+    
+    
+    /**
+     * The manifest itself failed to load (syntax/schema errors) - distinct
+     * from `NotFound` so a caller can tell "your `icon!` call has a typo"
+     * apart from "your `icons.gui.toml` is broken", which would otherwise
+     * both look like a missing entry.
+     */
+    data class ManifestInvalid(
+        val `errors`: List<kotlin.String>) : ResolveOutcome() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeResolveOutcome : FfiConverterRustBuffer<ResolveOutcome>{
+    override fun read(buf: ByteBuffer): ResolveOutcome {
+        return when(buf.getInt()) {
+            1 -> ResolveOutcome.Found(
+                FfiConverterTypeResolvedEntry.read(buf),
+                )
+            2 -> ResolveOutcome.NotFound
+            3 -> ResolveOutcome.ManifestInvalid(
+                FfiConverterSequenceString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ResolveOutcome) = when(value) {
+        is ResolveOutcome.Found -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeResolvedEntry.allocationSize(value.v1)
+            )
+        }
+        is ResolveOutcome.NotFound -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+            )
+        }
+        is ResolveOutcome.ManifestInvalid -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterSequenceString.allocationSize(value.`errors`)
+            )
+        }
+    }
+
+    override fun write(value: ResolveOutcome, buf: ByteBuffer) {
+        when(value) {
+            is ResolveOutcome.Found -> {
+                buf.putInt(1)
+                FfiConverterTypeResolvedEntry.write(value.v1, buf)
+                Unit
+            }
+            is ResolveOutcome.NotFound -> {
+                buf.putInt(2)
+                Unit
+            }
+            is ResolveOutcome.ManifestInvalid -> {
+                buf.putInt(3)
+                FfiConverterSequenceString.write(value.`errors`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
 
 /**
  * @suppress
@@ -1358,38 +1448,6 @@ public object FfiConverterOptionalTypeMacroCallSite: FfiConverterRustBuffer<Macr
 /**
  * @suppress
  */
-public object FfiConverterOptionalTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntry?> {
-    override fun read(buf: ByteBuffer): ResolvedEntry? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterTypeResolvedEntry.read(buf)
-    }
-
-    override fun allocationSize(value: ResolvedEntry?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterTypeResolvedEntry.allocationSize(value)
-        }
-    }
-
-    override fun write(value: ResolvedEntry?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterTypeResolvedEntry.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
 public object FfiConverterOptionalTypeIconSelector: FfiConverterRustBuffer<IconSelector?> {
     override fun read(buf: ByteBuffer): IconSelector? {
         if (buf.get().toInt() == 0) {
@@ -1415,16 +1473,38 @@ public object FfiConverterOptionalTypeIconSelector: FfiConverterRustBuffer<IconS
         }
     }
 }
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
+        }
+    }
+}
         /**
-         * Walks up from `rust_file_path`'s directory to the nearest `Cargo.toml`
-         * (the crate root - the same convention `guicons-macros`' own
-         * `CARGO_MANIFEST_DIR` and `guicons-lsp`'s crate-scoped manifest lookup
-         * both use), then returns `<that dir>/icons.gui.toml` if it exists
-         * there. `None` either way if no such manifest can be found - callers
-         * must not fall back to searching anywhere else, or a `.rs` file in one
-         * crate of a multi-crate workspace could resolve against a different
-         * crate's manifest (a real bug, already fixed once in `guicons-lsp` -
-         * see its `hover_rust` doc comment).
+         * See `guicons_core::manifest_path_for_rust_file` - this is a thin
+         * UniFFI-string wrapper over it, shared with `guicons-lsp`'s own
+         * crate-scoped manifest lookup so the two can't drift apart.
          */ fun `findManifestForRustFile`(`rustFilePath`: kotlin.String): kotlin.String? {
             return FfiConverterOptionalString.lift(
     uniffiRustCall() { _status ->
@@ -1464,12 +1544,12 @@ public object FfiConverterOptionalTypeIconSelector: FfiConverterRustBuffer<IconS
 
         /**
          * Loads `manifest_path` and looks up the entry matching
-         * `family`/`size`/`variant` - `None` if the manifest fails to load at
-         * all, or no matching entry exists. Manifest errors are otherwise
-         * swallowed here (not surfaced to the caller) - this is a best-effort
-         * preview lookup, not a validator; use `icons check` for that.
-         */ fun `resolveFamilyVariant`(`manifestPath`: kotlin.String, `family`: kotlin.String, `size`: kotlin.UShort?, `variant`: kotlin.String?): ResolvedEntry? {
-            return FfiConverterOptionalTypeResolvedEntry.lift(
+         * `family`/`size`/`variant`. A manifest that fails to load at all
+         * surfaces as `ManifestInvalid`, not silently as `NotFound` - this is a
+         * best-effort preview lookup, not a validator; use `icons check` for the
+         * full diagnostic list.
+         */ fun `resolveFamilyVariant`(`manifestPath`: kotlin.String, `family`: kotlin.String, `size`: kotlin.UShort?, `variant`: kotlin.String?): ResolveOutcome {
+            return FfiConverterTypeResolveOutcome.lift(
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_resolve_family_variant(
         FfiConverterString.lower(`manifestPath`),FfiConverterString.lower(`family`),FfiConverterOptionalUShort.lower(`size`),FfiConverterOptionalString.lower(`variant`),_status)

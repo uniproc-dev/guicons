@@ -18,4 +18,4 @@ pub use load::{load_icon_manifest, load_icon_manifest_from_str, load_icon_manife
 pub use model::{parse_glyph_spec, try_parse_glyph_spec, IconEntry, IconEntrySource, IconManifest, ProviderSchema};
 pub use naming::{rust_const_name, rust_fn_name};
 pub use parse::{builtin_provider_names, decompose_iconify_id};
-pub use paths::{canonicalize_or_self, find_workspace_root_from};
+pub use paths::{canonicalize_or_self, find_workspace_root_from, manifest_path_for_rust_file};

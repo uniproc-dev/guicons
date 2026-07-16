@@ -1,15 +1,12 @@
+mod completion;
+mod diagnostics;
+mod goto_definition;
+mod hover;
 mod iconify_completion;
 mod manifest_text;
 mod position;
 
 use guicons_core::{IconEntrySource, IconManifest};
-use iconify_completion::IconifyContext;
-use manifest_text::{
-    defaults_root, family_header_at, iconify_field_at, include_target_at, keyword_at, offset_line_overlaps,
-    path_field_at, provider_name_at, section_kind_at, word_prefix_span, PathFieldKind, SectionKind,
-};
-use position::LineIndex;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
@@ -47,159 +44,8 @@ fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String 
     }
 }
 
-/// Hover text for a raw `"provider:name"` iconify literal in a `.rs`
-/// `icon!(...)` call - links out to the icon's own page on Iconify's
-/// site (where it can actually be looked at) rather than just restating
-/// that it's an iconify id, which is already visible from the call site
-/// itself and tells the reader nothing new.
-fn iconify_literal_hover(id: &str) -> String {
-    match id.split_once(':') {
-        Some((prefix, name)) => format!("**{id}** - [view on Iconify](https://icon-sets.iconify.design/{prefix}/{name}/)"),
-        None => format!("**{id}** - not in `provider:name` form, will never resolve"),
-    }
-}
-
-/// Whether a manifest error should be published, given the
-/// `reportTomlSyntaxErrors` setting - only raw TOML syntax errors are
-/// ever suppressed, never semantic ones (unknown field, missing source, ...).
-fn should_report_error(message: &str, report_toml_syntax_errors: bool) -> bool {
-    report_toml_syntax_errors || !message.starts_with("TOML syntax error:")
-}
-
-/// `file`/`windows-ico` targets that don't exist on disk - not caught by
-/// `guicons_core` at all (it only validates manifest *shape*), so this is
-/// entirely an editor-tooling-side check.
-fn missing_file_diagnostics(text: &str, path: &Path, manifest: &IconManifest, index: &LineIndex) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for entry in manifest.entries() {
-        if entry.file() != path {
-            continue;
-        }
-        if let IconEntrySource::File(target) = entry.source() {
-            diagnostics.extend(missing_file_diagnostic(target, "file", entry.span(), text, index, manifest));
-        }
-        if let Some(ico) = entry.windows_ico() {
-            diagnostics.extend(missing_file_diagnostic(ico, "windows-ico", entry.span(), text, index, manifest));
-        }
-    }
-    diagnostics
-}
-
-fn missing_file_diagnostic(
-    target: &Path,
-    field: &str,
-    span: std::ops::Range<usize>,
-    text: &str,
-    index: &LineIndex,
-    manifest: &IconManifest,
-) -> Option<Diagnostic> {
-    if target.exists() {
-        return None;
-    }
-    let mut message = format!("`{field}` not found: `{}`", display_path(target, manifest));
-    if let Some(suggestion) = closest_file_name(target) {
-        message.push_str(&format!(" - did you mean `{suggestion}`?"));
-    }
-    Some(Diagnostic {
-        range: index.range(text, span),
-        severity: Some(DiagnosticSeverity::ERROR),
-        message,
-        source: Some("guicons".to_string()),
-        ..Default::default()
-    })
-}
-
-/// `iconify = "provider:name"` entries whose SVG isn't cached locally yet -
-/// same check `guicons-cli::check` does, mirrored here so the editor
-/// doesn't fall behind the CLI. Informational, not a warning/error: not
-/// being cached yet doesn't mean the id is wrong, just unconfirmed
-/// without a network fetch (`icons fetch`), which neither `check` nor
-/// this diagnostic ever does itself.
-fn unresolved_iconify_diagnostics(text: &str, path: &Path, manifest: &IconManifest, index: &LineIndex) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for entry in manifest.entries() {
-        if entry.file() != path {
-            continue;
-        }
-        let IconEntrySource::Iconify(id) = entry.source() else { continue };
-
-        let message = if id.split_once(':').is_none() {
-            format!("iconify id `{id}` isn't in `provider:name` form - it will never resolve")
-        } else {
-            let cache_path = guicons_net::iconify_cache_path(manifest.workspace_root(), id);
-            if cache_path.exists() {
-                continue;
-            }
-            format!(
-                "iconify icon `{id}` isn't cached locally yet - can't confirm it resolves without a network fetch (`icons fetch` or `GUICONS_ALLOW_NETWORK=1`)"
-            )
-        };
-
-        diagnostics.push(Diagnostic {
-            range: index.range(text, entry.span()),
-            severity: Some(DiagnosticSeverity::INFORMATION),
-            message,
-            source: Some("guicons".to_string()),
-            ..Default::default()
-        });
-    }
-    diagnostics
-}
-
-/// Closest sibling file by name (Levenshtein distance), for a "did you
-/// mean" suggestion - `None` if nothing in the directory is plausibly a
-/// typo of `target`'s name (rather than just unrelated).
-fn closest_file_name(target: &Path) -> Option<String> {
-    let dir = target.parent()?;
-    let target_name = target.file_name()?.to_string_lossy().to_string();
-    let mut best: Option<(usize, String)> = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let distance = levenshtein(&target_name, &name);
-        if best.as_ref().is_none_or(|(best_distance, _)| distance < *best_distance) {
-            best = Some((distance, name));
-        }
-    }
-    let (distance, name) = best?;
-    (distance <= target_name.len().div_ceil(2).max(2)).then_some(name)
-}
-
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut curr = vec![0usize; b.len() + 1];
-    for i in 1..=a.len() {
-        curr[0] = i;
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[b.len()]
-}
-
-/// Where `file`/`windows-ico` completion should look for candidates:
-/// `defaults.root` (if declared) resolved against the workspace root,
-/// same as `guicons_core` resolves it - falling back to the manifest's
-/// own directory.
-fn resolve_file_base_dir(manifest_path: &Path, text: &str) -> PathBuf {
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let Some(root) = defaults_root(text) else {
-        return manifest_dir.to_path_buf();
-    };
-    let root_path = Path::new(&root);
-    if root_path.is_absolute() {
-        return root_path.to_path_buf();
-    }
-    guicons_core::find_workspace_root_from(manifest_path)
-        .map(|workspace_root| workspace_root.join(root_path))
-        .unwrap_or_else(|| manifest_dir.join(root_path))
-}
-
 pub struct Backend {
-    client: Client,
+    pub(crate) client: Client,
     documents: RwLock<HashMap<Url, String>>,
     /// Set from `initialize`'s `root_uri`/`workspace_folders` - needed at
     /// `initialized` time (builtin-provider cache warmup) when no document
@@ -282,26 +128,22 @@ const DEFAULT_SKIP_DIRS: &[&str] = &[
 /// them. Skips `DEFAULT_SKIP_DIRS` plus whatever `extra_skip_dirs` the
 /// client configured.
 fn find_manifest_files(root: &Path, extra_skip_dirs: &[String]) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(read_dir) = std::fs::read_dir(&dir) else { continue };
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-            if is_dir {
-                let name = entry.file_name();
-                let skipped = DEFAULT_SKIP_DIRS.iter().any(|skip| name == std::ffi::OsStr::new(skip))
-                    || extra_skip_dirs.iter().any(|skip| name == std::ffi::OsStr::new(skip.as_str()));
-                if !skipped {
-                    stack.push(path);
-                }
-            } else if entry.file_name() == std::ffi::OsStr::new("icons.gui.toml") {
-                found.push(path);
-            }
-        }
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || !is_skipped_dir(entry, extra_skip_dirs))
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() == std::ffi::OsStr::new("icons.gui.toml"))
+        .map(walkdir::DirEntry::into_path)
+        .collect()
+}
+
+fn is_skipped_dir(entry: &walkdir::DirEntry, extra_skip_dirs: &[String]) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
     }
-    found
+    let name = entry.file_name();
+    DEFAULT_SKIP_DIRS.iter().any(|skip| name == std::ffi::OsStr::new(skip))
+        || extra_skip_dirs.iter().any(|skip| name == std::ffi::OsStr::new(skip.as_str()))
 }
 
 impl Backend {
@@ -346,41 +188,12 @@ impl Backend {
     /// points in callers) is cheap enough here - manifests are typically
     /// small, and this only runs on interactive requests, not hot paths.
     async fn manifest_for_rust_file(&self, path: &Path) -> Option<IconManifest> {
-        let crate_root = path.parent().and_then(guicons_core::find_workspace_root_from)?;
-        let manifest_path = guicons_core::canonicalize_or_self(&crate_root.join("icons.gui.toml"));
+        let manifest_path = guicons_core::canonicalize_or_self(&guicons_core::manifest_path_for_rust_file(path)?);
         self.manifests.read().await.get(&manifest_path).cloned()
     }
 
     async fn set_document_text(&self, uri: Url, text: String) {
         self.documents.write().await.insert(uri, text);
-    }
-
-    async fn publish_diagnostics_for(&self, uri: Url) {
-        let Some(path) = Self::path_for_uri(&uri) else { return };
-        let Some(text) = self.document_text(&uri).await else { return };
-
-        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, &text);
-        let index = LineIndex::new(&text);
-        let report_syntax_errors = self.report_toml_syntax_errors.load(std::sync::atomic::Ordering::Relaxed);
-        let mut diagnostics: Vec<Diagnostic> = errors
-            .iter()
-            .filter(|error| error.file == path)
-            .filter(|error| should_report_error(&error.message, report_syntax_errors))
-            .map(|error| Diagnostic {
-                range: match &error.span {
-                    Some(span) => index.range(&text, span.clone()),
-                    None => Range::new(Position::new(0, 0), Position::new(0, 0)),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                message: error.message.clone(),
-                source: Some("guicons".to_string()),
-                ..Default::default()
-            })
-            .collect();
-        diagnostics.extend(missing_file_diagnostics(&text, &path, &manifest, &index));
-        diagnostics.extend(unresolved_iconify_diagnostics(&text, &path, &manifest, &index));
-
-        self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
 
     /// Rescans the workspace for `icons.gui.toml` files and replaces the
@@ -407,98 +220,6 @@ impl Backend {
         }
         let (manifest, _) = guicons_core::load_icon_manifest_from_str(path, text);
         self.manifests.write().await.insert(path.to_path_buf(), manifest);
-    }
-
-    /// Hover for `icon!`/`icon_key!`/`icon_data!` call sites in a `.rs`
-    /// document - the Rust-side counterpart to the TOML `hover()` body.
-    /// Unlike a `.gui.toml` document, a `.rs` file has no manifest of its
-    /// own - but it does belong to a specific *crate*, and that's exactly
-    /// what picks the manifest: `guicons-macros` itself resolves
-    /// `icon!(...)` at compile time against `CARGO_MANIFEST_DIR/icons.gui.toml`
-    /// (the crate root, not the cargo *workspace* root - a distinction
-    /// `find_workspace_root_from` already embodies, since it stops at the
-    /// nearest ancestor `Cargo.toml` rather than climbing to one with
-    /// `[workspace]`). In a multi-crate workspace, a `.rs` file must only
-    /// ever resolve against *its own* crate's manifest - never some other
-    /// crate's, even if one happens to be sitting in `self.manifests`.
-    async fn hover_rust(&self, path: &Path, uri: &Url, position: Position) -> Result<Option<Hover>> {
-        let Some(text) = self.document_text(uri).await else { return Ok(None) };
-        let index = LineIndex::new(&text);
-        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
-
-        let Some(site) = guicons_core::rust_macro::macro_call_at(&text, offset) else { return Ok(None) };
-        let Ok(selector) = guicons_core::selector::parse_selector(&site.arg_text) else { return Ok(None) };
-        let range = Some(index.range(&text, site.arg_range));
-
-        match selector {
-            guicons_core::selector::IconSelector::Iconify(id) => Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: iconify_literal_hover(&id),
-                }),
-                range,
-            })),
-            guicons_core::selector::IconSelector::FamilyVariant { family, size, variant } => {
-                let Some(manifest) = self.manifest_for_rust_file(path).await else { return Ok(None) };
-                let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
-                    return Ok(None);
-                };
-
-                let mut lines = vec![format!("**{}**", entry.key())];
-                lines.push(format!("- family: `{}`", entry.family()));
-                if let Some(variant) = entry.variant() {
-                    lines.push(format!("- variant: `{variant}`"));
-                }
-                if let Some(size) = entry.size() {
-                    lines.push(format!("- size: `{size}`"));
-                }
-                lines.push(format!("- source: {}", describe_source(entry.source(), &manifest)));
-
-                Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value: lines.join("\n") }),
-                    range,
-                }))
-            }
-        }
-    }
-
-    /// Goto-definition for `icon!`/`icon_key!`/`icon_data!` call sites in
-    /// a `.rs` document - jumps to the entry's declaration in
-    /// `icons.gui.toml` (or one of its `[link]`d files - `entry.file()`
-    /// already tracks exactly which one, same as the TOML-side
-    /// `goto_definition` body relies on). Nothing to jump to for a raw
-    /// iconify literal - there's no manifest declaration for one.
-    async fn goto_definition_rust(
-        &self,
-        path: &Path,
-        uri: &Url,
-        position: Position,
-    ) -> Result<Option<GotoDefinitionResponse>> {
-        let Some(text) = self.document_text(uri).await else { return Ok(None) };
-        let index = LineIndex::new(&text);
-        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
-
-        let Some(site) = guicons_core::rust_macro::macro_call_at(&text, offset) else { return Ok(None) };
-        let Ok(guicons_core::selector::IconSelector::FamilyVariant { family, size, variant }) =
-            guicons_core::selector::parse_selector(&site.arg_text)
-        else {
-            return Ok(None);
-        };
-
-        let Some(manifest) = self.manifest_for_rust_file(path).await else { return Ok(None) };
-        let Some(entry) = manifest.entry_for_family_variant(&family, size, variant.as_deref()) else {
-            return Ok(None);
-        };
-
-        let entry_file = entry.file().to_path_buf();
-        let entry_span = entry.span();
-        let Ok(target_uri) = Url::from_file_path(&entry_file) else { return Ok(None) };
-
-        let Some(entry_text) = self.document_text_or_disk(&target_uri, &entry_file).await else { return Ok(None) };
-        let entry_index = LineIndex::new(&entry_text);
-        let range = entry_index.range(&entry_text, entry_span);
-
-        Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, range))))
     }
 
     /// Warms the cache for any provider this manifest declares that isn't
@@ -645,290 +366,24 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let position = params.text_document_position_params.position;
-
-        let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
-        if path.extension().is_some_and(|ext| ext == "rs") {
-            return self.hover_rust(&path, &uri, position).await;
-        }
-        let Some(text) = self.document_text(&uri).await else { return Ok(None) };
-        let index = LineIndex::new(&text);
-        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
-
-        if let Some((keyword, doc)) = keyword_at(&text, offset) {
-            let value = format!("**{keyword}**\n\n{}\n\n```toml\n{}\n```", doc.description, doc.example);
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
-                range: None,
-            }));
-        }
-
-        let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
-
-        if let Some(name) = provider_name_at(&text, offset) {
-            if let Some(schema) = manifest.provider(&name) {
-                let is_builtin = guicons_core::builtin_provider_names().any(|builtin| builtin == name);
-                let overridden = text.contains(&format!("[providers.{name}.override]"));
-                let origin = match (is_builtin, overridden) {
-                    (true, true) => "built-in provider, overridden in this file",
-                    (true, false) => "built-in provider",
-                    (false, _) => "custom provider",
-                };
-                let variants = if schema.variants.is_empty() { "(none)".to_string() } else { schema.variants.join(", ") };
-                let sizes = if schema.sizes.is_empty() {
-                    "(none)".to_string()
-                } else {
-                    schema.sizes.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
-                };
-                let value = format!("**{name}** - {origin}\n\n- variants: {variants}\n- sizes: {sizes}");
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent { kind: MarkupKind::Markdown, value }),
-                    range: None,
-                }));
-            }
-        }
-
-        if let Some((family, size)) = family_header_at(&text, offset) {
-            let variants: Vec<_> = manifest
-                .entries()
-                .iter()
-                .filter(|entry| entry.file() == path && entry.family() == family && (size.is_none() || entry.size() == size))
-                .collect();
-            if !variants.is_empty() {
-                let mut lines = vec![format!("**{family}**")];
-                for entry in variants {
-                    let variant = entry.variant().unwrap_or("(no variant)");
-                    let size_suffix = entry.size().map(|s| format!(" @ {s}")).unwrap_or_default();
-                    lines.push(format!("- `{variant}`{size_suffix}: {}", describe_source(entry.source(), &manifest)));
-                }
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: lines.join("\n"),
-                    }),
-                    range: None,
-                }));
-            }
-        }
-
-        let Some(entry) = manifest
-            .entries()
-            .iter()
-            .find(|entry| entry.file() == path && entry.span().contains(&offset))
-        else {
-            return Ok(None);
-        };
-
-        let mut lines = vec![format!("**{}**", entry.key())];
-        lines.push(format!("- family: `{}`", entry.family()));
-        if let Some(variant) = entry.variant() {
-            lines.push(format!("- variant: `{variant}`"));
-        }
-        if let Some(size) = entry.size() {
-            lines.push(format!("- size: `{size}`"));
-        }
-        lines.push(format!("- source: {}", describe_source(entry.source(), &manifest)));
-
-        Ok(Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: lines.join("\n"),
-            }),
-            range: Some(index.range(&text, entry.span())),
-        }))
+        self.hover_impl(params).await
     }
 
     async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = params.text_document_position_params.text_document.uri;
-        let position = params.text_document_position_params.position;
-
-        let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
-        if path.extension().is_some_and(|ext| ext == "rs") {
-            return self.goto_definition_rust(&path, &uri, position).await;
-        }
-        let Some(text) = self.document_text(&uri).await else { return Ok(None) };
-        let index = LineIndex::new(&text);
-        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
-
-        let start_of_file = Range::new(Position::new(0, 0), Position::new(0, 0));
-
-        if let Some(target) = include_target_at(&text, offset) {
-            let base = path.parent().unwrap_or_else(|| Path::new("."));
-            let resolved = guicons_core::canonicalize_or_self(&base.join(target));
-            if let Ok(target_uri) = Url::from_file_path(&resolved) {
-                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, start_of_file))));
-            }
-        }
-
-        let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
-        let Some(entry) = manifest
-            .entries()
-            .iter()
-            .find(|entry| entry.file() == path && offset_line_overlaps(&text, offset, entry.span()))
-        else {
-            return Ok(None);
-        };
-        if let IconEntrySource::File(source_path) = entry.source() {
-            if let Ok(target_uri) = Url::from_file_path(source_path) {
-                return Ok(Some(GotoDefinitionResponse::Scalar(Location::new(target_uri, start_of_file))));
-            }
-        }
-
-        Ok(None)
+        self.goto_definition_impl(params).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri;
-        let position = params.text_document_position.position;
-
-        let Some(path) = Self::path_for_uri(&uri) else { return Ok(None) };
-        let Some(text) = self.document_text(&uri).await else { return Ok(None) };
-        let index = LineIndex::new(&text);
-        let Some(offset) = index.offset(&text, position) else { return Ok(None) };
-
-        let line_start = text[..offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let line_prefix = text[line_start..offset].trim_start();
-
-        // An explicit replacement range, instead of leaving the client to
-        // guess a word boundary - which can otherwise reach back across
-        // the previous line's newline when `offset` is at column 0.
-        let replace_range = index.range(&text, word_prefix_span(&text, offset));
-        let make_item = |name: String, detail: &'static str| CompletionItem {
-            label: name.clone(),
-            detail: Some(detail.to_string()),
-            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range: replace_range, new_text: name })),
-            ..Default::default()
-        };
-
-        if line_prefix.starts_with('[') && line_prefix.contains("providers.") {
-            let items = guicons_core::builtin_provider_names()
-                .map(|name| make_item(name.to_string(), "built-in provider"))
-                .collect();
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        if let Some((kind, quote_span, typed)) = path_field_at(&text, offset) {
-            let base_dir = match kind {
-                PathFieldKind::Includes => path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
-                PathFieldKind::File => resolve_file_base_dir(&path, &text),
-            };
-            let allowed_extensions: &[&str] = match kind {
-                PathFieldKind::Includes => &["toml"],
-                PathFieldKind::File => &["svg", "png"],
-            };
-            let range = index.range(&text, quote_span);
-            let mut items = Vec::new();
-            if let Ok(read_dir) = std::fs::read_dir(&base_dir) {
-                for dir_entry in read_dir.flatten() {
-                    let name = dir_entry.file_name().to_string_lossy().into_owned();
-                    if !name.starts_with(&typed) {
-                        continue;
-                    }
-                    let is_dir = dir_entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-                    if !is_dir && !allowed_extensions.iter().any(|ext| name.ends_with(&format!(".{ext}"))) {
-                        continue;
-                    }
-                    items.push(CompletionItem {
-                        label: name.clone(),
-                        kind: Some(if is_dir { CompletionItemKind::FOLDER } else { CompletionItemKind::FILE }),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: name })),
-                        ..Default::default()
-                    });
-                }
-            }
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        if let Some((quote_span, typed)) = iconify_field_at(&text, offset) {
-            let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
-
-            let (items, is_incomplete) = match iconify_completion::classify(quote_span, &typed) {
-                IconifyContext::Provider { range, typed } => {
-                    let range = index.range(&text, range);
-                    let mut names: BTreeSet<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
-                    names.extend(manifest.provider_names().map(str::to_string));
-                    let items = names
-                        .into_iter()
-                        .filter(|name| name.starts_with(&typed))
-                        .map(|name| CompletionItem {
-                            label: format!("{name}:"),
-                            detail: Some("provider".to_string()),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range,
-                                new_text: format!("{name}:"),
-                            })),
-                            ..Default::default()
-                        })
-                        .collect();
-                    (items, false)
-                }
-                IconifyContext::Name { provider, range, typed } => {
-                    let range = index.range(&text, range);
-                    let names = match self.workspace_root().await {
-                        Some(workspace_root) => iconify_completion::cached_names(&workspace_root, &provider),
-                        None => None,
-                    };
-                    // Some collections run into the thousands of names
-                    // (e.g. `mdi` has ~7500) - sending every match on each
-                    // keystroke is wasted bandwidth and a slow render on
-                    // the client, so cap the response and mark it
-                    // incomplete: the client is expected to re-request as
-                    // the user narrows `typed` further, per the LSP spec's
-                    // `CompletionList.isIncomplete`.
-                    const LIMIT: usize = 200;
-                    let mut matches = names.into_iter().flatten().filter(|name| name.starts_with(&typed));
-                    let items: Vec<CompletionItem> = matches
-                        .by_ref()
-                        .take(LIMIT)
-                        .map(|name| CompletionItem {
-                            label: name.clone(),
-                            detail: Some("icon".to_string()),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: name })),
-                            ..Default::default()
-                        })
-                        .collect();
-                    let is_incomplete = matches.next().is_some();
-                    (items, is_incomplete)
-                }
-            };
-            return Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })));
-        }
-
-        if line_prefix.starts_with("variants.") {
-            let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
-            let mut variants = BTreeSet::new();
-            for provider_name in guicons_core::builtin_provider_names() {
-                if let Some(schema) = manifest.provider(provider_name) {
-                    variants.extend(schema.variants.iter().cloned());
-                }
-            }
-            let items = variants.into_iter().map(|variant| make_item(variant, "variant")).collect();
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        // A bare key being typed (possibly partially) at the start of a
-        // line - not yet past `=`, `.`, or `[`.
-        let is_bare_key_prefix = line_prefix.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_');
-        if is_bare_key_prefix {
-            let fields: &[&str] = match section_kind_at(&text, offset) {
-                SectionKind::TopLevel => &["defaults", "link", "providers"],
-                SectionKind::Defaults => &["root", "provider", "size"],
-                SectionKind::Link => &["includes"],
-                SectionKind::Provider => &["variants", "sizes"],
-                SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "variants"],
-            };
-            let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        Ok(None)
+        self.completion_impl(params).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diagnostics::{closest_file_name, levenshtein, missing_file_diagnostics, should_report_error, unresolved_iconify_diagnostics};
+    use hover::iconify_literal_hover;
+    use position::LineIndex;
     use tempfile::tempdir;
 
     #[test]
