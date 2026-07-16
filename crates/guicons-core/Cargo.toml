@@ -6,6 +6,8 @@ license.workspace = true
 description = "Core manifest model and parser for guicons"
 
 [dependencies]
+petgraph = "0.6"
+syn = { version = "2", default-features = false, features = ["parsing", "printing"] }
 toml-span = "0.7"
 winnow = "0.7.13"
 

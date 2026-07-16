@@ -14,30 +14,9 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService};
 
-/// Renders `path` for display: relative to the workspace root or the
-/// manifest's own directory when possible (both are "not noise"), falling
-/// back to the absolute path only if neither contains it. Always
-/// forward-slashed - `Path::display()` on Windows keeps `\`, and
-/// `{:?}`/Debug escapes it as `\\`, both of which are just noise here.
-fn display_path(path: &Path, manifest: &IconManifest) -> String {
-    if let Ok(rel) = path.strip_prefix(manifest.workspace_root()) {
-        return normalize_slashes(rel);
-    }
-    if let Some(manifest_dir) = manifest.manifest_path().parent() {
-        if let Ok(rel) = path.strip_prefix(manifest_dir) {
-            return normalize_slashes(rel);
-        }
-    }
-    normalize_slashes(path)
-}
-
-fn normalize_slashes(path: &Path) -> String {
-    path.display().to_string().replace('\\', "/")
-}
-
 fn describe_source(source: &IconEntrySource, manifest: &IconManifest) -> String {
     match source {
-        IconEntrySource::File(path) => format!("file `{}`", display_path(path, manifest)),
+        IconEntrySource::File(path) => format!("file `{}`", manifest.display_path(path)),
         IconEntrySource::Iconify(id) => format!("iconify `{id}`"),
         IconEntrySource::Url(url) => format!("url `{url}`"),
         IconEntrySource::Glyph(spec) => format!("glyph `{spec}`"),

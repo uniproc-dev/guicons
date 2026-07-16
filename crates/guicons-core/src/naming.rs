@@ -1,6 +1,3 @@
-/// Converts a manifest key (e.g. `settings-filled`) into a Rust `SCREAMING_SNAKE_CASE`
-/// identifier fragment, shared by the codegen in `guicons` and the `guicons::icon!` macro
-/// so the two never drift apart on what a given key's constant is named.
 pub fn rust_const_name(key: &str) -> String {
     key.replace(['.', '-'], "_").to_ascii_uppercase()
 }
@@ -32,61 +29,11 @@ pub fn rust_fn_name(name: &str) -> String {
     result
 }
 
+/// `syn::parse_str::<syn::Ident>` already rejects every reserved/strict
+/// keyword (and returns `Err` rather than panicking, unlike
+/// `proc_macro2::Ident::new`) - no need to maintain our own copy of that list.
 fn is_rust_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "as" | "break"
-            | "const"
-            | "continue"
-            | "crate"
-            | "else"
-            | "enum"
-            | "extern"
-            | "false"
-            | "fn"
-            | "for"
-            | "if"
-            | "impl"
-            | "in"
-            | "let"
-            | "loop"
-            | "match"
-            | "mod"
-            | "move"
-            | "mut"
-            | "pub"
-            | "ref"
-            | "return"
-            | "self"
-            | "Self"
-            | "static"
-            | "struct"
-            | "super"
-            | "trait"
-            | "true"
-            | "type"
-            | "unsafe"
-            | "use"
-            | "where"
-            | "while"
-            | "async"
-            | "await"
-            | "dyn"
-            | "abstract"
-            | "become"
-            | "box"
-            | "do"
-            | "final"
-            | "macro"
-            | "override"
-            | "priv"
-            | "typeof"
-            | "unsized"
-            | "virtual"
-            | "yield"
-            | "try"
-            | "union"
-    )
+    syn::parse_str::<syn::Ident>(name).is_err()
 }
 
 #[cfg(test)]

@@ -1,38 +1,24 @@
 //! Entry point for loading a manifest file (and any files it `[link]`ed manifests)
 //! from disk.
 //!
-//! This is the only module that touches the filesystem or knows about
-//! multiple files; parsing the contents of a single already-read document is
-//! [`crate::parse`]'s job.
+//! Loading is two phases: [`crate::graph`] discovers the `[link].includes`
+//! file tree (an artifact - [`crate::graph::ManifestGraph`]) without
+//! interpreting any of it, then this module "compiles" that artifact -
+//! walking it bottom-up, turning each node's raw text into entries/
+//! providers via [`crate::parse`] and merging children into parents.
+//! Neither phase touches the filesystem itself except `graph`'s discovery
+//! step.
 
 use crate::diagnostics::{Diagnostics, ManifestError};
-use crate::model::{IconEntry, IconManifest, ProviderSchema};
+use crate::graph::{build_manifest_graph, ManifestFile, ManifestGraph};
+use crate::model::{IconEntry, IconManifest};
 use crate::parse::{collect_entries, parse_defaults, parse_providers, resolve_providers};
-use crate::paths::{canonicalize_or_self, find_workspace_root, resolve_entry_path};
+use crate::paths::find_workspace_root;
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
-use toml_span::de_helpers::TableHelper;
+use std::path::Path;
 use toml_span::value::ValueInner;
-use toml_span::{Deserialize, DeserError, Value};
-
-/// Wraps a `Deserialize` value to also capture its own span - `Vec<String>`
-/// alone (what `TableHelper::optional` normally gives back) loses each
-/// array element's individual location, which is exactly what's needed to
-/// point a "this included file doesn't exist" diagnostic at the specific
-/// `includes = [...]` string that named it, rather than at the whole
-/// `[link]` table.
-struct WithSpan<T> {
-    value: T,
-    span: toml_span::Span,
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for WithSpan<T> {
-    fn deserialize(value: &mut Value<'de>) -> Result<Self, DeserError> {
-        let span = value.span;
-        T::deserialize(value).map(|value| WithSpan { value, span })
-    }
-}
 
 /// Parse a manifest (and any files it `[link]`ed manifests), collecting every
 /// problem found instead of stopping at the first one.
@@ -41,46 +27,35 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for WithSpan<T> {
 /// parse are simply omitted, everything else is kept. Check whether the
 /// returned error list is empty to know if the manifest is fully valid.
 pub fn load_icon_manifest(manifest_path: &Path) -> (IconManifest, Vec<ManifestError>) {
-    let mut seen = Vec::new();
-    let mut source_paths = Vec::new();
-    let mut errors = Vec::new();
-    let manifest =
-        load_icon_manifest_inner(manifest_path, &mut seen, &mut source_paths, &mut errors, None);
-    check_duplicate_keys(&manifest.entries, &mut errors);
-    (manifest, errors)
+    load(manifest_path, None)
 }
 
 /// Like [`load_icon_manifest`], but parses `content` for the root document
 /// instead of reading `manifest_path` from disk - for editor tooling that
 /// wants diagnostics against unsaved buffer content. Any `[link]`d files
 /// are still read from disk as usual (they aren't the document being edited).
-pub fn load_icon_manifest_from_str(
-    manifest_path: &Path,
-    content: &str,
-) -> (IconManifest, Vec<ManifestError>) {
-    let mut seen = Vec::new();
-    let mut source_paths = Vec::new();
+pub fn load_icon_manifest_from_str(manifest_path: &Path, content: &str) -> (IconManifest, Vec<ManifestError>) {
+    load(manifest_path, Some(content))
+}
+
+fn load(manifest_path: &Path, content_override: Option<&str>) -> (IconManifest, Vec<ManifestError>) {
     let mut errors = Vec::new();
-    let manifest = load_icon_manifest_inner(
-        manifest_path,
-        &mut seen,
-        &mut source_paths,
-        &mut errors,
-        Some(content),
-    );
+    let file_graph = build_manifest_graph(manifest_path, content_override, &mut errors);
+    let source_paths: Vec<_> = file_graph.graph.node_weights().map(|file| file.path.clone()).collect();
+    let manifest = compile(&file_graph, file_graph.root, &source_paths, &mut errors);
     check_duplicate_keys(&manifest.entries, &mut errors);
     (manifest, errors)
 }
 
 /// Two entries sharing the same `key()` - including one from the root
 /// manifest colliding with one pulled in via `[link]` - is never checked
-/// anywhere else in `load.rs`/`parse.rs`: entries are just concatenated and
-/// sorted by key. Left unnoticed, `IconManifest::entry_for_key` would
-/// silently return whichever one `.find()` hits first (sort-order-
-/// dependent), so this runs once, over the fully merged entry list, at
-/// every public load entry point - not per-file inside the recursive
-/// `[link]` walk, which would double-report collisions that already exist
-/// purely within one included file.
+/// anywhere else: entries are just concatenated and sorted by key. Left
+/// unnoticed, `IconManifest::entry_for_key` would silently return
+/// whichever one `.find()` hits first (sort-order-dependent), so this runs
+/// once, over the fully merged entry list, at every public load entry
+/// point - not per-file inside `compile`'s recursive walk, which would
+/// double-report collisions that already exist purely within one included
+/// file.
 fn check_duplicate_keys(entries: &[IconEntry], errors: &mut Vec<ManifestError>) {
     let mut first_seen: HashMap<&str, &IconEntry> = HashMap::new();
     for entry in entries {
@@ -121,223 +96,101 @@ pub fn load_icon_manifest_or_panic(manifest_path: &Path) -> IconManifest {
     manifest
 }
 
-fn empty_manifest(manifest_path: &Path) -> IconManifest {
+fn empty_manifest(manifest_path: &Path, source_paths: &[std::path::PathBuf]) -> IconManifest {
     IconManifest {
         manifest_path: manifest_path.to_path_buf(),
-        workspace_root: manifest_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf(),
-        source_paths: vec![manifest_path.to_path_buf()],
+        workspace_root: manifest_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+        source_paths: source_paths.to_vec(),
         entries: Vec::new(),
         providers: std::collections::HashMap::new(),
     }
 }
 
-fn load_icon_manifest_inner(
-    manifest_path: &Path,
-    seen: &mut Vec<PathBuf>,
-    source_paths: &mut Vec<PathBuf>,
+/// Walks `file_graph` bottom-up from `node`, turning each file's raw text
+/// into entries/providers and merging its children's (already-compiled)
+/// entries/providers in first, matching how a file's *own* declarations
+/// were always meant to win over anything pulled in via `[link]`. Children
+/// are visited in `includes = [...]`'s declaration order (the edge
+/// weight), not `petgraph`'s own adjacency order.
+fn compile(
+    file_graph: &ManifestGraph,
+    node: NodeIndex,
+    source_paths: &[std::path::PathBuf],
     errors: &mut Vec<ManifestError>,
-    content_override: Option<&str>,
 ) -> IconManifest {
-    let manifest_path = canonicalize_or_self(manifest_path);
+    let ManifestFile { path: manifest_path, content } = &file_graph.graph[node];
 
-    if seen.contains(&manifest_path) {
-        errors.push(ManifestError {
-            file: manifest_path.clone(),
-            span: None,
-            message: "recursive icon manifest include".to_string(),
-        });
-        return empty_manifest(&manifest_path);
+    if content.is_empty() {
+        // Discovery already recorded why (unreadable file, or this node is
+        // itself a cycle's dead end) - nothing left to compile.
+        return empty_manifest(manifest_path, source_paths);
     }
-    seen.push(manifest_path.clone());
-    source_paths.push(manifest_path.clone());
 
-    let owned_content;
-    let content = match content_override {
-        Some(content) => content,
-        None => match fs::read_to_string(&manifest_path) {
-            Ok(content) => {
-                owned_content = content;
-                &owned_content
-            }
-            Err(e) => {
-                errors.push(ManifestError {
-                    file: manifest_path.clone(),
-                    span: None,
-                    message: format!("failed to read file: {e}"),
-                });
-                seen.pop();
-                return empty_manifest(&manifest_path);
-            }
-        },
-    };
-
-    let mut root_value = match toml_span::parse(content) {
-        Ok(value) => value,
-        Err(e) => {
-            errors.push(ManifestError {
-                file: manifest_path.clone(),
-                span: Some(e.span.into()),
-                message: format!("TOML syntax error: {e}"),
-            });
-            seen.pop();
-            return empty_manifest(&manifest_path);
-        }
-    };
-
-    let root_span = root_value.span;
-    let mut root_table = match root_value.take() {
+    let mut root_table = match toml_span::parse(content).expect("re-parsing already-validated content").take() {
         ValueInner::Table(table) => table,
-        _ => {
-            errors.push(ManifestError {
-                file: manifest_path.clone(),
-                span: Some(root_span.into()),
-                message: "manifest root must be a table".to_string(),
-            });
-            seen.pop();
-            return empty_manifest(&manifest_path);
-        }
+        _ => unreachable!("discovery already rejected a non-table root"),
     };
 
-    let manifest_dir = manifest_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let workspace_root = find_workspace_root(&manifest_path).unwrap_or_else(|| manifest_dir.clone());
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let workspace_root = find_workspace_root(manifest_path).unwrap_or_else(|| manifest_dir.clone());
 
     let defaults_value = root_table.remove("defaults");
     let defaults = {
-        let mut diags = Diagnostics {
-            file: &manifest_path,
-            errors,
-        };
+        let mut diags = Diagnostics { file: manifest_path, errors };
         parse_defaults(defaults_value, &workspace_root, &manifest_dir, &mut diags)
     };
 
     let providers_value = root_table.remove("providers");
     let own_providers = {
-        let mut diags = Diagnostics {
-            file: &manifest_path,
-            errors,
-        };
+        let mut diags = Diagnostics { file: manifest_path, errors };
         let declarations = parse_providers(providers_value, &mut diags);
         resolve_providers(declarations, &mut diags)
     };
 
-    let link_value = root_table.remove("link");
+    // Already validated (and its includes turned into graph edges) during
+    // discovery - nothing left to do with it here except discard it so it
+    // isn't mistaken for an icon entry below.
+    root_table.remove("link");
+
+    let mut children: Vec<_> = file_graph
+        .graph
+        .edges(node)
+        .map(|edge| (*edge.weight(), edge.target()))
+        .collect();
+    children.sort_by_key(|(ordinal, _)| *ordinal);
 
     let mut entries = Vec::new();
     let mut providers = HashMap::new();
-    collect_includes(link_value, &manifest_path, seen, source_paths, errors, &mut entries, &mut providers);
+    for (_, child) in children {
+        let child_manifest = compile(file_graph, child, source_paths, errors);
+        entries.extend(child_manifest.entries);
+        providers.extend(child_manifest.providers);
+    }
     // A file's own `[providers.*]` take precedence over anything an
     // `[link]`d file declared under the same name.
     providers.extend(own_providers);
 
     let own_entries_start = entries.len();
     {
-        let mut diags = Diagnostics {
-            file: &manifest_path,
-            errors,
-        };
-        collect_entries(
-            Vec::new(),
-            root_table,
-            &workspace_root,
-            &defaults,
-            &providers,
-            &mut diags,
-            &mut entries,
-        );
+        let mut diags = Diagnostics { file: manifest_path, errors };
+        collect_entries(Vec::new(), root_table, &workspace_root, &defaults, &providers, &mut diags, &mut entries);
     }
     // `collect_entries` doesn't know which file it's parsing (that's the
     // whole point of the parse/load split) - entries from `[link]`d
     // files already have `file` set correctly by their own recursive
-    // `load_icon_manifest_inner` call, so only stamp the ones this level
-    // just added for its own root table.
+    // `compile` call, so only stamp the ones this level just added for
+    // its own root table.
     for entry in &mut entries[own_entries_start..] {
         entry.file = manifest_path.clone();
     }
 
     entries.sort_by(|a, b| a.key().cmp(b.key()));
-    seen.pop();
 
     IconManifest {
-        manifest_path,
+        manifest_path: manifest_path.clone(),
         workspace_root,
-        source_paths: source_paths.clone(),
+        source_paths: source_paths.to_vec(),
         entries,
         providers,
-    }
-}
-
-/// `path.display()`, without Windows' `\\?\` verbatim-path prefix -
-/// `canonicalize_or_self` (applied to `manifest_path` at the top of
-/// `load_icon_manifest_inner`) adds it, and every path resolved relative
-/// to that manifest inherits it too; it's accurate but just noise in a
-/// diagnostic message meant for a human to read.
-fn display_path(path: &Path) -> String {
-    let rendered = path.display().to_string();
-    rendered.strip_prefix(r"\\?\").unwrap_or(&rendered).to_string()
-}
-
-fn collect_includes(
-    link_value: Option<Value<'_>>,
-    manifest_path: &Path,
-    seen: &mut Vec<PathBuf>,
-    source_paths: &mut Vec<PathBuf>,
-    errors: &mut Vec<ManifestError>,
-    entries_acc: &mut Vec<IconEntry>,
-    providers_acc: &mut HashMap<String, ProviderSchema>,
-) {
-    let Some(mut link_value) = link_value else {
-        return;
-    };
-    let link_span = link_value.span;
-    let ValueInner::Table(link_table) = link_value.take() else {
-        errors.push(ManifestError {
-            file: manifest_path.to_path_buf(),
-            span: Some(link_span.into()),
-            message: "`[link]` must be a table".to_string(),
-        });
-        return;
-    };
-
-    let includes: Option<Vec<WithSpan<String>>> = {
-        let mut th = TableHelper::from((link_table, link_span));
-        let includes = th.optional("includes");
-        let mut diags = Diagnostics {
-            file: manifest_path,
-            errors,
-        };
-        if let Err(err) = th.finalize(None) {
-            diags.push_deser_error(err);
-        }
-        includes
-    };
-    let Some(includes) = includes else {
-        return;
-    };
-
-    let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-
-    for include in includes {
-        let child = resolve_entry_path(base, &include.value);
-        if !child.exists() {
-            errors.push(ManifestError {
-                file: manifest_path.to_path_buf(),
-                span: Some(include.span.into()),
-                message: format!(
-                    "`[link]` includes a file that doesn't exist: `{}` (resolved to {})",
-                    include.value,
-                    display_path(&child)
-                ),
-            });
-            continue;
-        }
-        let child_manifest = load_icon_manifest_inner(&child, seen, source_paths, errors, None);
-        entries_acc.extend(child_manifest.entries);
-        providers_acc.extend(child_manifest.providers);
     }
 }

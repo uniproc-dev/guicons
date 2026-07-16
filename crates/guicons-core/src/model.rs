@@ -41,42 +41,6 @@ pub enum IconEntrySource {
     Glyph(String),
 }
 
-/// Parses a `[glyph]` entry's `font-family:codepoint` spec, where
-/// `codepoint` is either a single literal character or a `U+XXXX` hex escape.
-/// Non-panicking - used at load/validation time (`parse.rs`'s `parse_entry`)
-/// where a malformed spec should be a `ManifestError`, not a crash. See
-/// [`parse_glyph_spec`] for the panicking wrapper macro-expansion/codegen
-/// call sites use, where the manifest is assumed already validated.
-pub fn try_parse_glyph_spec(spec: &str) -> Result<(String, char), String> {
-    let Some((font_family, codepoint)) = spec.split_once(':') else {
-        return Err(format!("must use `font-family:codepoint`, got `{spec}`"));
-    };
-    let font_family = font_family.trim();
-    let codepoint = codepoint.trim();
-    let ch = if codepoint.chars().count() == 1 {
-        codepoint.chars().next().unwrap()
-    } else {
-        let normalized = codepoint
-            .strip_prefix("U+")
-            .or_else(|| codepoint.strip_prefix("u+"))
-            .unwrap_or(codepoint);
-        let scalar = u32::from_str_radix(normalized, 16)
-            .map_err(|_| format!("has invalid codepoint `{codepoint}`"))?;
-        char::from_u32(scalar).ok_or_else(|| format!("has non-scalar codepoint `{codepoint}`"))?
-    };
-    Ok((font_family.to_string(), ch))
-}
-
-/// Parses a `[glyph]` entry's `font-family:codepoint` spec, panicking with
-/// `context` (the entry's key) on a malformed spec - for codegen/macro call
-/// sites (`guicons-macros`, `guicons-build`) that only ever run against a
-/// manifest `icons check`/`load_icon_manifest` has already validated via
-/// [`try_parse_glyph_spec`], so a failure here means the cached/materialized
-/// data itself is corrupt, not a user input problem worth a graceful error.
-pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
-    try_parse_glyph_spec(spec).unwrap_or_else(|message| panic!("Glyph manifest entry `{context}` {message}"))
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ManifestDefaults {
     pub(crate) roots: Vec<PathBuf>,
@@ -101,6 +65,25 @@ impl IconManifest {
         &self.source_paths
     }
 
+    /// Renders `path` for display: relative to the workspace root or the
+    /// manifest's own directory when possible (both are "not noise"),
+    /// falling back to the absolute path only if neither contains it.
+    /// Always forward-slashed - `Path::display()` on Windows keeps `\`,
+    /// and `{:?}`/Debug escapes it as `\\`, both of which are just noise
+    /// here (also strips Windows' `\\?\` verbatim-path prefix, which
+    /// `canonicalize`d paths - what every path here is - otherwise carry).
+    pub fn display_path(&self, path: &Path) -> String {
+        if let Ok(rel) = path.strip_prefix(self.workspace_root()) {
+            return normalize_slashes(rel);
+        }
+        if let Some(manifest_dir) = self.manifest_path().parent() {
+            if let Ok(rel) = path.strip_prefix(manifest_dir) {
+                return normalize_slashes(rel);
+            }
+        }
+        normalize_slashes(path)
+    }
+
     pub fn entry_for_key(&self, key: &str) -> Option<&IconEntry> {
         self.entries.iter().find(|entry| entry.key == key)
     }
@@ -120,11 +103,6 @@ impl IconManifest {
         self.providers.get(name)
     }
 
-    /// Names of every provider resolved for this manifest - builtin,
-    /// custom, and `.override`s, all already merged (see
-    /// `parse::resolve_providers`). Not just the built-in set
-    /// (`guicons_core::builtin_provider_names`), which is static and
-    /// doesn't know about a manifest's own `[providers.<name>]` entries.
     pub fn provider_names(&self) -> impl Iterator<Item = &str> {
         self.providers.keys().map(String::as_str)
     }
@@ -175,4 +153,9 @@ impl IconEntry {
     pub fn file(&self) -> &Path {
         &self.file
     }
+}
+
+fn normalize_slashes(path: &Path) -> String {
+    let rendered = path.display().to_string().replace('\\', "/");
+    rendered.strip_prefix(r"//?/").unwrap_or(&rendered).to_string()
 }

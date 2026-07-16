@@ -270,12 +270,9 @@ fn parse_selector_literal(literal: &LitStr) -> Result<IconSelector> {
     guicons_core::selector::parse_resource_selector(&literal.value()).map_err(|message| Error::new_spanned(literal, message))
 }
 
-/// Reads the dotted-path form (`family.24.filled`) token-by-token from a
-/// `syn::ParseStream` - `24` lexes as a `LitInt`, not an `Ident`, so this
-/// can't just be `Punctuated<Ident, Token![.]>`, each segment is read as
-/// either - then delegates the actual family/size/variant grammar to the
-/// shared `classify_segments` (also used by `guicons-lsp`'s plain-text
-/// path parser, `parse_selector_path_text`).
+/// `24` in `family.24.filled` lexes as a `LitInt`, not an `Ident`, so this
+/// can't just be `Punctuated<Ident, Token![.]>` - each segment is read as
+/// either, then classified by the shared `classify_segments`.
 fn parse_selector_path(input: ParseStream<'_>) -> Result<IconSelector> {
     let mut segments = Vec::new();
     loop {

@@ -34,14 +34,40 @@ dependencies {
     // URI (unlike PNG/JPEG, SVG isn't a registered ImageIO format), so
     // guicons' overwhelmingly-SVG icons need converting to something the
     // popup can actually display.
-    implementation("org.apache.xmlgraphics:batik-transcoder:1.17")
-    implementation("org.apache.xmlgraphics:batik-codec:1.17")
+    //
+    // `xml-apis`/`xml-apis-ext` excluded: a legacy pre-JDK-JAXP artifact
+    // that bundles its own `javax.xml.parsers.*`/`javax.xml.transform.*`
+    // classes - loaded by the plugin's own `PluginClassLoader` if bundled,
+    // while the platform resolves its JAXP provider
+    // (`org.apache.xerces.jaxp.SAXParserFactoryImpl`) through its own
+    // `PathClassLoader`. Two different classloaders for what the JVM
+    // treats as the same type -> `ClassCastException` at runtime. JAXP is
+    // just part of the JDK now, so this is pure legacy baggage batik still
+    // transitively drags in - not needed on any JVM this plugin targets.
+    implementation("org.apache.xmlgraphics:batik-transcoder:1.17") {
+        exclude(group = "xml-apis")
+    }
+    implementation("org.apache.xmlgraphics:batik-codec:1.17") {
+        exclude(group = "xml-apis")
+    }
 
     // Loads ../crates/guicons-ffi's native library - the generated UniFFI
     // Kotlin bindings (src/main/kotlin/uniffi/guicons_ffi/guicons_ffi.kt)
-    // use JNA's `Native.load` to call into it. Version pinned to match
-    // whatever the bindings were generated against; bump both together.
-    implementation("net.java.dev.jna:jna:5.14.0")
+    // use JNA's `Native.load` to call into it. `compileOnly`, not
+    // `implementation` - deliberately NOT bundled into the plugin, so at
+    // runtime `PluginClassLoader` (which checks the plugin's own jars
+    // before delegating to the platform) finds no local `com.sun.jna.*`
+    // and falls through to the IntelliJ Platform's own bundled JNA
+    // instead. That's the only version whose native dispatch lib actually
+    // matches the `-Djna.boot.library.path`/`-Djna.nosys`/
+    // `-Djna.noclasspath` the platform sets up for itself - bundling our
+    // own JNA jar here shadows it with a version whose native ABI won't
+    // match, and fails with "Unable to locate JNA native support library"
+    // (hit exactly this with a bundled 5.14.0 against a platform bundling
+    // 7.0.4). This also means we track whatever JNA version each IDE
+    // build ships, automatically, instead of one pinned number that only
+    // works against a specific IDE build.
+    compileOnly("net.java.dev.jna:jna:5.14.0")
 }
 
 intellijPlatform {
@@ -72,6 +98,57 @@ kotlin {
     // own (separate, currently a bit broken-looking) SDK picker for this.
     jvmToolchain(21)
 }
+
+// The checked-in `src/main/resources/win32-x86-64/guicons_ffi.dll` and
+// `src/main/kotlin/uniffi/guicons_ffi/guicons_ffi.kt` used to be
+// hand-copied after every `crates/guicons-ffi` change - and, predictably,
+// went stale relative to each other (a real UniFFI checksum-mismatch
+// crash at runtime was hit exactly this way). Both are now regenerated
+// from the same `cargo build` output on every Gradle build instead, so
+// they can never drift apart.
+val repoRoot = layout.projectDirectory.dir("..").asFile
+val ffiCrateDir = repoRoot.resolve("crates/guicons-ffi")
+val ffiReleaseDll = repoRoot.resolve("target/release/guicons_ffi.dll")
+val uniffiBindingsOutDir = layout.buildDirectory.dir("generated/uniffi")
+
+val cargoBuildFfi = tasks.register<Exec>("cargoBuildFfi") {
+    description = "Builds ../crates/guicons-ffi in release mode"
+    workingDir = repoRoot
+    commandLine("cargo", "build", "--release", "-p", "guicons-ffi")
+    inputs.dir(repoRoot.resolve("crates/guicons-ffi/src"))
+    inputs.dir(repoRoot.resolve("crates/guicons-core/src"))
+    outputs.file(ffiReleaseDll)
+}
+
+val generateUniffiBindings = tasks.register<Exec>("generateUniffiBindings") {
+    dependsOn(cargoBuildFfi)
+    description = "Regenerates the Kotlin UniFFI bindings from the just-built native library"
+    workingDir = ffiCrateDir
+    commandLine(
+        "cargo", "run", "--release", "--bin", "uniffi-bindgen", "--features", "uniffi/cli", "--",
+        "generate", "--library", ffiReleaseDll.absolutePath,
+        "--language", "kotlin", "--out-dir", uniffiBindingsOutDir.get().asFile.absolutePath,
+    )
+    inputs.file(ffiReleaseDll)
+    outputs.dir(uniffiBindingsOutDir)
+}
+
+val syncNativeLibrary = tasks.register<Copy>("syncNativeLibrary") {
+    description = "Copies the freshly built native library into the plugin's resources"
+    dependsOn(cargoBuildFfi)
+    from(ffiReleaseDll)
+    into(layout.projectDirectory.dir("src/main/resources/win32-x86-64"))
+}
+
+val syncGeneratedBindings = tasks.register<Copy>("syncGeneratedBindings") {
+    description = "Overwrites the checked-in Kotlin bindings with the freshly regenerated ones"
+    dependsOn(generateUniffiBindings)
+    from(uniffiBindingsOutDir.get().dir("uniffi/guicons_ffi"))
+    into(layout.projectDirectory.dir("src/main/kotlin/uniffi/guicons_ffi"))
+}
+
+tasks.named("processResources") { dependsOn(syncNativeLibrary) }
+tasks.named("compileKotlin") { dependsOn(syncGeneratedBindings) }
 
 tasks {
     wrapper {

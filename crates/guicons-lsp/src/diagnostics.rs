@@ -1,5 +1,5 @@
 use crate::position::LineIndex;
-use crate::{display_path, Backend};
+use crate::Backend;
 use guicons_core::{IconEntrySource, IconManifest};
 use std::path::Path;
 use tower_lsp::lsp_types::*;
@@ -41,7 +41,7 @@ fn missing_file_diagnostic(
     if target.exists() {
         return None;
     }
-    let mut message = format!("`{field}` not found: `{}`", display_path(target, manifest));
+    let mut message = format!("`{field}` not found: `{}`", manifest.display_path(target));
     if let Some(suggestion) = closest_file_name(target) {
         message.push_str(&format!(" - did you mean `{suggestion}`?"));
     }

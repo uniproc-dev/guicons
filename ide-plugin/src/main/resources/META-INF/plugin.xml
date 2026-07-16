@@ -17,5 +17,17 @@
         <lang.documentationProvider
             language="Rust"
             implementationClass="dev.guicons.ideaplugin.GuiconsDocumentationProvider"/>
+        <!-- Handles the string-literal argument case (icon!("family/variant"))
+             that the legacy documentationProvider above never gets offered -
+             see GuiconsPsiDocumentationTargetProvider's doc comment for why. -->
+        <platform.backend.documentation.psiTargetProvider
+            implementation="dev.guicons.ideaplugin.GuiconsPsiDocumentationTargetProvider"/>
     </extensions>
+
+    <actions>
+        <!-- Overrides Ctrl+Q/F1 itself - see GuiconsQuickDocAction's doc
+             comment for why the two providers above still aren't enough
+             for a string-literal macro argument. -->
+        <action id="QuickJavaDoc" class="dev.guicons.ideaplugin.GuiconsQuickDocAction" overrides="true"/>
+    </actions>
 </idea-plugin>

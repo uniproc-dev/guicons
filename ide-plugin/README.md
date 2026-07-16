@@ -65,23 +65,16 @@ apart over time was exactly the failure mode worth avoiding.
 
 ### Regenerating the bindings
 
-After changing `crates/guicons-ffi`'s exported API:
-
-```powershell
-cd ..\crates\guicons-ffi
-cargo build --release
-cargo run --release --bin uniffi-bindgen --features uniffi/cli -- generate `
-    --library ..\..\target\release\guicons_ffi.dll `
-    --language kotlin --out-dir generated
-```
-
-then copy `generated/uniffi/guicons_ffi/guicons_ffi.kt` over
-`ide-plugin/src/main/kotlin/uniffi/guicons_ffi/guicons_ffi.kt`, and
-`target/release/guicons_ffi.dll` over
-`ide-plugin/src/main/resources/win32-x86-64/guicons_ffi.dll`. Not wired
-into a Gradle task yet - a real next step, not just busywork, since
-forgetting this step silently leaves the plugin calling a stale native
-library.
+Automatic now, wired into `build.gradle.kts`: `compileKotlin` depends on
+`cargoBuildFfi` -> `generateUniffiBindings` -> `syncGeneratedBindings`
+(overwrites `src/main/kotlin/uniffi/guicons_ffi/guicons_ffi.kt`), and
+`processResources` depends on `cargoBuildFfi` -> `syncNativeLibrary`
+(overwrites `src/main/resources/win32-x86-64/guicons_ffi.dll`). Both
+regenerate from the same `cargo build --release -p guicons-ffi` output,
+so they can't drift apart the way the old hand-copy step used to (hit a
+real `UniFFI API checksum mismatch` crash from exactly that). Just run
+`./gradlew build`/`compileKotlin`/`runIde` as normal after changing
+`crates/guicons-ffi`'s exported API - no manual copy step anymore.
 
 Only a Windows (`win32-x86-64`) build of the native library is bundled -
 no macOS/Linux `.dylib`/`.so` built or tested.
@@ -112,8 +105,5 @@ no macOS/Linux `.dylib`/`.so` built or tested.
   or the JNA/native-library loading path specifically.
 - `iconify`/`url`/`glyph` sources aren't previewed at all - only `file`
   (`ResolvedEntry.sourceFile` is `None` for those; see `guicons-ffi`).
-- Bindings-regeneration isn't automated (see above) - a real risk of the
-  checked-in `.kt`/`.dll` silently going stale relative to
-  `guicons-ffi`'s Rust source.
 - Only ever run through `compileKotlin` - `./gradlew runIde` (the actual
   "does hovering an icon! call show a picture" test) has never been done.

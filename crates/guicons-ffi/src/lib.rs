@@ -1,16 +1,9 @@
-//! UniFFI bindings exposing `guicons-core`'s already-tested icon-macro
-//! detection, selector parsing, and manifest-resolution logic to
-//! non-Rust consumers - currently just `../ide-plugin`'s Kotlin/JVM side,
-//! so it doesn't need to reimplement any of this in Kotlin (which it
-//! originally did as a first cut, then didn't - see that project's
-//! README/git history for the reasoning).
+//! UniFFI bindings for `../ide-plugin`'s Kotlin/JVM side.
 //!
-//! Deliberately thin: every function here is a direct pass-through to
-//! `guicons-core`, converting only what UniFFI's supported type set
-//! requires (its own mirror `enum`s/`struct`s instead of `guicons-core`'s,
-//! `usize`/`u16` <-> `u32`, `Path`/`PathBuf` <-> `String`). No logic of
-//! its own worth testing independently - the real tests live in
-//! `guicons-core` itself, which this crate depends on unchanged.
+//! Every function here is a thin pass-through to `guicons-core`,
+//! converting only what UniFFI's type set requires (its own mirror
+//! `enum`s/`struct`s, `usize`/`u16` <-> `u32`, `Path`/`PathBuf` <->
+//! `String`) - no logic of its own worth testing independently.
 
 uniffi::setup_scaffolding!();
 
@@ -145,7 +138,7 @@ pub fn resolve_family_variant(
 
     let (source_description, source_file) = match entry.source() {
         IconEntrySource::File(path) => {
-            (format!("file `{}`", path.display()), Some(path.to_string_lossy().into_owned()))
+            (format!("file `{}`", manifest.display_path(path)), Some(path.to_string_lossy().into_owned()))
         }
         IconEntrySource::Iconify(id) => (format!("iconify `{id}`"), None),
         IconEntrySource::Url(url) => (format!("url `{url}`"), None),

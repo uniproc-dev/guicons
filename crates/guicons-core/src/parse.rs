@@ -42,14 +42,13 @@ fn split_family_and_size(path: &[String]) -> (String, Option<u16>) {
 
 pub(crate) fn collect_entries(
     path: Vec<String>,
-    table: Table<'_>,
+    mut table: Table<'_>,
     workspace_root: &Path,
     defaults: &ManifestDefaults,
     providers: &HashMap<String, ProviderSchema>,
     diags: &mut Diagnostics,
     acc: &mut Vec<IconEntry>,
 ) {
-    let mut table = table;
     if let Some(mut variants_value) = table.remove("variants") {
         let key_prefix = path.join("-");
         let (family, explicit_size) = split_family_and_size(&path);
@@ -208,7 +207,7 @@ fn parse_entry(
     } else if let Some(url) = url {
         IconEntrySource::Url(url)
     } else if let Some(glyph) = glyph {
-        if let Err(reason) = crate::model::try_parse_glyph_spec(&glyph) {
+        if let Err(reason) = try_parse_glyph_spec(&glyph) {
             diags.error(
                 Some(table_span.into()),
                 format!("icon manifest entry `{key}` has an invalid glyph spec: {reason}"),
@@ -428,10 +427,6 @@ pub(crate) fn parse_providers(
     providers
 }
 
-/// The provider schemas guicons ships with, parsed from
-/// `builtin_providers.gui.toml` through this same module rather than
-/// hardcoded as Rust literals - so it's one less thing to keep in sync by
-/// hand, and a manifest author can see exactly what it looks like.
 fn builtin_providers() -> &'static HashMap<String, ProviderSchema> {
     static BUILTIN: std::sync::OnceLock<HashMap<String, ProviderSchema>> = std::sync::OnceLock::new();
     BUILTIN.get_or_init(|| {
@@ -457,8 +452,6 @@ fn builtin_providers() -> &'static HashMap<String, ProviderSchema> {
     })
 }
 
-/// Names of the providers with a built-in schema (`fluent`, `ph`, etc.) -
-/// for editor tooling offering completion on `[providers.<name>]`.
 pub fn builtin_provider_names() -> impl Iterator<Item = &'static str> {
     builtin_providers().keys().map(String::as_str)
 }
@@ -583,6 +576,42 @@ fn default_iconify_id(
         name.push_str(variant);
     }
     Some(format!("{provider}:{name}"))
+}
+
+/// Parses a `[glyph]` entry's `font-family:codepoint` spec, where
+/// `codepoint` is either a single literal character or a `U+XXXX` hex escape.
+/// Non-panicking - used at load/validation time (this module's `parse_entry`)
+/// where a malformed spec should be a `ManifestError`, not a crash. See
+/// [`parse_glyph_spec`] for the panicking wrapper macro-expansion/codegen
+/// call sites use, where the manifest is assumed already validated.
+pub fn try_parse_glyph_spec(spec: &str) -> Result<(String, char), String> {
+    let Some((font_family, codepoint)) = spec.split_once(':') else {
+        return Err(format!("must use `font-family:codepoint`, got `{spec}`"));
+    };
+    let font_family = font_family.trim();
+    let codepoint = codepoint.trim();
+    let ch = if codepoint.chars().count() == 1 {
+        codepoint.chars().next().unwrap()
+    } else {
+        let normalized = codepoint
+            .strip_prefix("U+")
+            .or_else(|| codepoint.strip_prefix("u+"))
+            .unwrap_or(codepoint);
+        let scalar = u32::from_str_radix(normalized, 16)
+            .map_err(|_| format!("has invalid codepoint `{codepoint}`"))?;
+        char::from_u32(scalar).ok_or_else(|| format!("has non-scalar codepoint `{codepoint}`"))?
+    };
+    Ok((font_family.to_string(), ch))
+}
+
+/// Parses a `[glyph]` entry's `font-family:codepoint` spec, panicking with
+/// `context` (the entry's key) on a malformed spec - for codegen/macro call
+/// sites (`guicons-macros`, `guicons-build`) that only ever run against a
+/// manifest `icons check`/`load_icon_manifest` has already validated via
+/// [`try_parse_glyph_spec`], so a failure here means the cached/materialized
+/// data itself is corrupt, not a user input problem worth a graceful error.
+pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
+    try_parse_glyph_spec(spec).unwrap_or_else(|message| panic!("Glyph manifest entry `{context}` {message}"))
 }
 
 pub(crate) fn resolve_file_from_roots(roots: &[PathBuf], value: &str) -> PathBuf {

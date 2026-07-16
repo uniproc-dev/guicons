@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn a_non_ascii_comment_does_not_confuse_the_byte_scanner() {
-        let text = "// комментарий про icon!(fake.one)\nicon!(docker.filled)";
+        let text = "// non-ascii comment about icon!(fake.one)\nicon!(docker.filled)";
         let sites = all_macro_calls(text);
         assert_eq!(sites.len(), 1, "{sites:?}");
         assert_eq!(sites[0].arg_text, "docker.filled");
