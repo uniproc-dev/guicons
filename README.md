@@ -1,6 +1,8 @@
-# guicons
+<div align="center">
+  <img src="assets/guicons-logo.svg" alt="guicons logo" width="400"/>
 
-<img src="assets/guicons-logo.svg" alt="guicons logo" width="200"/>
+  # guicons
+</div>
 
 A manifest-driven icon system for native Rust GUI applications: describe
 your icon set once in TOML (local files, URLs, iconify.design ids, font
