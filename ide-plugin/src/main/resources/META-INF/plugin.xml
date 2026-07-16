@@ -27,8 +27,9 @@
              bar, always available - see IconBrowserToolWindowFactory. -->
         <toolWindow id="Guicons Icons"
                     anchor="right"
-                    icon="/META-INF/pluginIcon.svg"
+                    icon="/icons/guiconsToolWindow.svg"
                     factoryClass="dev.guicons.ideaplugin.IconBrowserToolWindowFactory"/>
+        <postStartupActivity implementation="dev.guicons.ideaplugin.IconBrowserStartupActivity"/>
     </extensions>
 
     <actions>

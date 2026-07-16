@@ -7,6 +7,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.icons.AllIcons
+import com.intellij.ui.ColoredTreeCellRenderer
 import com.intellij.ui.JBColor
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.SearchTextField
@@ -16,6 +18,7 @@ import com.intellij.ui.content.ContentFactory
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -125,6 +128,7 @@ class IconBrowserPopup(private val project: Project, private val editor: Editor,
  * either way, just built for whichever editor/file is relevant. */
 fun buildIconBrowserTabs(project: Project, editor: Editor, rustFilePath: String, vertical: Boolean): JBTabbedPane {
     val tabs = JBTabbedPane()
+    tabs.background = UIUtil.getTreeBackground()
     val manifestTab = ManifestTab(project, editor, rustFilePath, vertical)
     val iconifyTab = IconifyTab(project, editor, rustFilePath, vertical)
     tabs.addTab("Manifest", manifestTab.component)
@@ -330,7 +334,7 @@ private fun detailRows(project: Project, item: TreeItem): List<JComponent> = whe
  * (double-click on the tree does the same thing, but a selection-only
  * click - needed anyway to *see* the preview - shouldn't also insert). */
 private class PreviewPanel(private val project: Project, private val scope: CoroutineScope, private val onInsert: (TreeItem) -> Unit) {
-    val component: JComponent = JPanel(BorderLayout()).apply { isOpaque = false }
+    val component: JComponent = JPanel(BorderLayout()).apply { background = UIUtil.getTreeBackground() }
     private val iconCard = IconCard()
     private val titleLabel = JLabel("", SwingConstants.CENTER)
     private val detailsPanel = JPanel()
@@ -406,24 +410,25 @@ private class PreviewPanel(private val project: Project, private val scope: Coro
  * that reads naturally top-to-bottom for a narrow, tall sidebar) when
  * pinned into a tool window.
  *
- * Every color guessed at here so far (matching `Panel.background`, then
- * `JBUI.CurrentTheme.Popup.BACKGROUND`) turned out to not actually be
- * what the surrounding popup/tool-window chrome uses - so instead of
- * guessing another one, every layer here is made fully non-opaque so
- * *nothing* in this chain paints its own background at all, all the way
- * down to the tree itself; whatever real color is behind the whole
- * `JBTabbedPane` (also left alone, untouched, elsewhere) shows through
- * uniformly instead. */
+ * Every prior attempt at this fought the tree itself - guessing a color
+ * name to paint it with, or forcing `isOpaque` one way or the other.
+ * `Help > Diagnostic Tools > UI Inspector`'d against the *platform's own*
+ * project tree settled it: `ProjectViewTree` doesn't override its
+ * background or opacity at all - it's a plain, untouched
+ * `com.intellij.ui.treeStructure.Tree`, same base class as this one, and
+ * it blends in because everything built *around* it (there, the Project
+ * tool window's own panels) is colored to match the tree's own natural
+ * `Tree.background`, never the other way round. So here: the tree/scroll/
+ * viewport are left completely alone, and [buildIconBrowserTabs] /
+ * [PreviewPanel] paint themselves with `UIUtil.getTreeBackground()`
+ * instead. */
 private fun buildSplit(tree: Tree, preview: JComponent, vertical: Boolean): JBSplitter {
     val splitter = JBSplitter(vertical, if (vertical) 0.45f else 0.55f)
     splitter.dividerWidth = 1
     splitter.setShowDividerControls(false)
-    splitter.isOpaque = false
-    tree.isOpaque = false
+    splitter.background = UIUtil.getTreeBackground()
     tree.border = JBUI.Borders.empty(8, 4)
     val treeScroll = JBScrollPane(tree)
-    treeScroll.isOpaque = false
-    treeScroll.viewport.isOpaque = false
     treeScroll.border = JBUI.Borders.empty()
     if (vertical) {
         splitter.firstComponent = preview
@@ -458,16 +463,22 @@ private fun buildTree(): Tree {
     tree.showsRootHandles = true
     tree.rowHeight = JBUI.scale(22)
     tree.selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
-    tree.cellRenderer = object : javax.swing.tree.DefaultTreeCellRenderer() {
-        override fun getTreeCellRendererComponent(
-            tree: JTree,
-            value: Any?,
-            selected: Boolean,
-            expanded: Boolean,
-            leaf: Boolean,
-            row: Int,
-            hasFocus: Boolean,
-        ) = super.getTreeCellRendererComponent(tree, treeItemOf(value)?.displayText ?: value, selected, expanded, leaf, row, hasFocus)
+    // `javax.swing.tree.DefaultTreeCellRenderer` (plain JDK Swing) was the
+    // actual source of the mismatched grey box - its `paint()`
+    // unconditionally `fillRect`s a `backgroundNonSelectionColor` read
+    // from `Tree.textBackground`, ignoring both `isOpaque` and whatever
+    // color the `Tree` component itself has. `ColoredTreeCellRenderer` is
+    // IntelliJ's own replacement for exactly this - every built-in tree
+    // (`ProjectViewTree` included) uses it, and it paints its background
+    // through `RenderingUtil.getBackground(tree, selected)`, which reads
+    // the real `Tree`/`Tree.Selection` colors instead of a hardcoded UI
+    // resource.
+    tree.cellRenderer = object : ColoredTreeCellRenderer() {
+        override fun customizeCellRenderer(tree: JTree, value: Any?, selected: Boolean, expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean) {
+            val item = treeItemOf(value) ?: return
+            icon = if (item is TreeItem.Group) AllIcons.Nodes.Folder else AllIcons.FileTypes.Any_type
+            append(item.displayText)
+        }
     }
     return tree
 }
@@ -476,7 +487,7 @@ private fun buildTree(): Tree {
  * `icons.gui.toml`, grouped `manifest file -> family -> variant`, with a
  * preview pane on the right showing whatever's selected. */
 private class ManifestTab(project: Project, editor: Editor, rustFilePath: String, vertical: Boolean) {
-    val component: JComponent = JPanel(BorderLayout()).apply { isOpaque = false }
+    val component: JComponent = JPanel(BorderLayout()).apply { background = UIUtil.getTreeBackground() }
     private val scope = IconBrowserScope.of(project)
     private val tree = buildTree()
     private val preview = PreviewPanel(project, scope) { item ->
@@ -530,7 +541,7 @@ private class ManifestTab(project: Project, editor: Editor, rustFilePath: String
  * Manifest tab. Defaults to whatever collections are already cached on
  * disk before any search. */
 private class IconifyTab(project: Project, editor: Editor, rustFilePath: String, vertical: Boolean) {
-    val component: JComponent = JPanel(BorderLayout()).apply { isOpaque = false }
+    val component: JComponent = JPanel(BorderLayout()).apply { background = UIUtil.getTreeBackground() }
     private val searchField = SearchTextField()
     private val scope = IconBrowserScope.of(project)
     private val cacheRoot = iconifyCacheRoot(rustFilePath)

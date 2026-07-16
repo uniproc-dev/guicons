@@ -154,4 +154,14 @@ tasks {
     wrapper {
         gradleVersion = "9.0"
     }
+
+    // Internal mode gates a bunch of platform-only debugging UI - notably
+    // Help > Diagnostic Tools > UI Inspector, used to identify exactly
+    // which Swing component/color is responsible for a background
+    // mismatch instead of guessing blindly. Off by default in a normal
+    // IDE install; this makes the sandbox launched by `runIde` always
+    // have it on, no manual "Internal Mode" action needed each run.
+    named<JavaExec>("runIde") {
+        systemProperty("idea.is.internal", "true")
+    }
 }
