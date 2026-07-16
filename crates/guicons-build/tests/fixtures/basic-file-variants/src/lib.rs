@@ -103,7 +103,7 @@ mod tests {
         assert_eq!(guicons::icon_key!(toolbar.16.filled), icons::keys::TOOLBAR_16_FILLED);
         assert_eq!(guicons::icon_key!(toolbar.24.filled), icons::keys::TOOLBAR_24_FILLED);
         assert_eq!(guicons::icon_key!("toolbar/16/filled"), icons::keys::TOOLBAR_16_FILLED);
-        assert_eq!(guicons::icon_key!("toolbar/24/regular"), icons::keys::TOOLBAR_24_REGULAR);
+        assert_eq!(guicons::icon_key!(toolbar.24.regular), icons::keys::TOOLBAR_24_REGULAR);
     }
 
     /// `[logo.16]`/`[logo.32]` have no variants - `size_N()` should return

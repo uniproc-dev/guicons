@@ -1,5 +1,7 @@
 # guicons
 
+<img src="assets/guicons-logo.svg" alt="guicons logo" width="200"/>
+
 A manifest-driven icon system for native Rust GUI applications: describe
 your icon set once in TOML (local files, URLs, iconify.design ids, font
 glyphs, mixed freely), get a typed Rust registry, a Slint component, and

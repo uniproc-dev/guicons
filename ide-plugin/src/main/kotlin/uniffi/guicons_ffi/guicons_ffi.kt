@@ -30,6 +30,13 @@ import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 // This is a helper for safely working with byte buffers returned from the Rust code.
 // A rust-owned buffer is represented by its capacity, its current length, and a
@@ -719,6 +726,16 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -734,7 +751,15 @@ internal interface UniffiLib : Library {
         
     }
 
+    fun uniffi_guicons_ffi_fn_func_cached_iconify_collection_names(`workspaceRoot`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_guicons_ffi_fn_func_download_iconify_collection(`workspaceRoot`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,
+    ): Long
+    fun uniffi_guicons_ffi_fn_func_ensure_iconify_icon_cached(`workspaceRoot`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,
+    ): Long
     fun uniffi_guicons_ffi_fn_func_find_manifest_for_rust_file(`rustFilePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_guicons_ffi_fn_func_list_manifest_entries(`manifestPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_macro_call_at(`text`: RustBuffer.ByValue,`offset`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -742,6 +767,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_resolve_family_variant(`manifestPath`: RustBuffer.ByValue,`family`: RustBuffer.ByValue,`size`: RustBuffer.ByValue,`variant`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_guicons_ffi_fn_func_search_iconify_icons(`query`: RustBuffer.ByValue,`limit`: Int,
+    ): Long
     fun ffi_guicons_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_guicons_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -854,13 +881,23 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_guicons_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_guicons_ffi_checksum_func_cached_iconify_collection_names(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_download_iconify_collection(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_ensure_iconify_icon_cached(
+    ): Short
     fun uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_list_manifest_entries(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_macro_call_at(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_parse_selector(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_resolve_family_variant(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_search_iconify_icons(
     ): Short
     fun ffi_guicons_ffi_uniffi_contract_version(
     ): Int
@@ -879,7 +916,19 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_guicons_ffi_checksum_func_cached_iconify_collection_names() != 50944.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_download_iconify_collection() != 726.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_ensure_iconify_icon_cached() != 58278.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file() != 17306.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_list_manifest_entries() != 11244.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_macro_call_at() != 10220.toShort()) {
@@ -891,9 +940,52 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_guicons_ffi_checksum_func_resolve_family_variant() != 2360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_guicons_ffi_checksum_func_search_iconify_icons() != 61508.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
 }
 
 // Async support
+// Async return type handlers
+
+internal const val UNIFFI_RUST_FUTURE_POLL_READY = 0.toByte()
+internal const val UNIFFI_RUST_FUTURE_POLL_MAYBE_READY = 1.toByte()
+
+internal val uniffiContinuationHandleMap = UniffiHandleMap<CancellableContinuation<Byte>>()
+
+// FFI type for Rust future continuations
+internal object uniffiRustFutureContinuationCallbackImpl: UniffiRustFutureContinuationCallback {
+    override fun callback(data: Long, pollResult: Byte) {
+        uniffiContinuationHandleMap.remove(data).resume(pollResult)
+    }
+}
+
+internal suspend fun<T, F, E: kotlin.Exception> uniffiRustCallAsync(
+    rustFuture: Long,
+    pollFunc: (Long, UniffiRustFutureContinuationCallback, Long) -> Unit,
+    completeFunc: (Long, UniffiRustCallStatus) -> F,
+    freeFunc: (Long) -> Unit,
+    liftFunc: (F) -> T,
+    errorHandler: UniffiRustCallStatusErrorHandler<E>
+): T {
+    try {
+        do {
+            val pollResult = suspendCancellableCoroutine<Byte> { continuation ->
+                pollFunc(
+                    rustFuture,
+                    uniffiRustFutureContinuationCallbackImpl,
+                    uniffiContinuationHandleMap.insert(continuation)
+                )
+            }
+        } while (pollResult != UNIFFI_RUST_FUTURE_POLL_READY);
+
+        return liftFunc(
+            uniffiRustCallWithError(errorHandler, { status -> completeFunc(rustFuture, status) })
+        )
+    } finally {
+        freeFunc(rustFuture)
+    }
+}
 
 // Public interface members begin here.
 
@@ -981,6 +1073,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 
     override fun write(value: UInt, buf: ByteBuffer) {
         buf.putInt(value.toInt())
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1.toByte() else 0.toByte()
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
     }
 }
 
@@ -1107,7 +1222,21 @@ data class ResolvedEntry (
      * also need `guicons-net`'s cache/fetch logic ported over, which
      * this crate deliberately doesn't do yet.
      */
-    var `sourceFile`: kotlin.String?
+    var `sourceFile`: kotlin.String?, 
+    /**
+     * The manifest file this entry was actually declared in - the root
+     * `icons.gui.toml`, or one of its `[link]`d files, rendered for
+     * display (relative when possible). Distinct from `source_file` (the
+     * icon *asset*, e.g. an `.svg`) - this is where the
+     * `[family]`/`[family.variant]` table itself lives.
+     */
+    var `declaredInFile`: kotlin.String, 
+    /**
+     * Same file as `declared_in_file`, but the raw absolute path - for a
+     * caller that wants to actually open it (e.g. a "declared in" link),
+     * not just show it.
+     */
+    var `declaredInFilePath`: kotlin.String
 ) {
     
     companion object
@@ -1125,6 +1254,8 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -1134,7 +1265,9 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalUShort.allocationSize(value.`size`) +
             FfiConverterOptionalString.allocationSize(value.`variant`) +
             FfiConverterString.allocationSize(value.`sourceDescription`) +
-            FfiConverterOptionalString.allocationSize(value.`sourceFile`)
+            FfiConverterOptionalString.allocationSize(value.`sourceFile`) +
+            FfiConverterString.allocationSize(value.`declaredInFile`) +
+            FfiConverterString.allocationSize(value.`declaredInFilePath`)
     )
 
     override fun write(value: ResolvedEntry, buf: ByteBuffer) {
@@ -1144,6 +1277,8 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.write(value.`variant`, buf)
             FfiConverterString.write(value.`sourceDescription`, buf)
             FfiConverterOptionalString.write(value.`sourceFile`, buf)
+            FfiConverterString.write(value.`declaredInFile`, buf)
+            FfiConverterString.write(value.`declaredInFilePath`, buf)
     }
 }
 
@@ -1217,6 +1352,76 @@ public object FfiConverterTypeIconSelector : FfiConverterRustBuffer<IconSelector
             is IconSelector.Iconify -> {
                 buf.putInt(2)
                 FfiConverterString.write(value.`id`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+sealed class ListManifestEntriesOutcome {
+    
+    data class Found(
+        val `entries`: List<ResolvedEntry>) : ListManifestEntriesOutcome() {
+        companion object
+    }
+    
+    data class ManifestInvalid(
+        val `errors`: List<kotlin.String>) : ListManifestEntriesOutcome() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeListManifestEntriesOutcome : FfiConverterRustBuffer<ListManifestEntriesOutcome>{
+    override fun read(buf: ByteBuffer): ListManifestEntriesOutcome {
+        return when(buf.getInt()) {
+            1 -> ListManifestEntriesOutcome.Found(
+                FfiConverterSequenceTypeResolvedEntry.read(buf),
+                )
+            2 -> ListManifestEntriesOutcome.ManifestInvalid(
+                FfiConverterSequenceString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: ListManifestEntriesOutcome) = when(value) {
+        is ListManifestEntriesOutcome.Found -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterSequenceTypeResolvedEntry.allocationSize(value.`entries`)
+            )
+        }
+        is ListManifestEntriesOutcome.ManifestInvalid -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterSequenceString.allocationSize(value.`errors`)
+            )
+        }
+    }
+
+    override fun write(value: ListManifestEntriesOutcome, buf: ByteBuffer) {
+        when(value) {
+            is ListManifestEntriesOutcome.Found -> {
+                buf.putInt(1)
+                FfiConverterSequenceTypeResolvedEntry.write(value.`entries`, buf)
+                Unit
+            }
+            is ListManifestEntriesOutcome.ManifestInvalid -> {
+                buf.putInt(2)
+                FfiConverterSequenceString.write(value.`errors`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -1501,6 +1706,98 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
         }
     }
 }
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeResolvedEntry: FfiConverterRustBuffer<List<ResolvedEntry>> {
+    override fun read(buf: ByteBuffer): List<ResolvedEntry> {
+        val len = buf.getInt()
+        return List<ResolvedEntry>(len) {
+            FfiConverterTypeResolvedEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ResolvedEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeResolvedEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ResolvedEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeResolvedEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+
+
+
+
+        /**
+         * Icon names already cached on disk for `provider` - empty if its
+         * collection hasn't been fetched yet (see [`download_iconify_collection`]).
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `cachedIconifyCollectionNames`(`workspaceRoot`: kotlin.String, `provider`: kotlin.String) : List<kotlin.String> {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_cached_iconify_collection_names(FfiConverterString.lower(`workspaceRoot`),FfiConverterString.lower(`provider`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceString.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+        /**
+         * Downloads `provider`'s full collection listing into the cache if it
+         * isn't there already - `true` once it's cached (whether it already was,
+         * or this fetch succeeded), `false` on a network failure.
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `downloadIconifyCollection`(`workspaceRoot`: kotlin.String, `provider`: kotlin.String) : kotlin.Boolean {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_download_iconify_collection(FfiConverterString.lower(`workspaceRoot`),FfiConverterString.lower(`provider`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_poll_i8(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_complete_i8(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_free_i8(future) },
+        // lift function
+        { FfiConverterBoolean.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
+        /**
+         * Ensures `id` (`"prefix:name"`) is cached on disk, downloading it if
+         * needed - the local `.svg` path once it's there, `None` on a network
+         * failure.
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `ensureIconifyIconCached`(`workspaceRoot`: kotlin.String, `id`: kotlin.String) : kotlin.String? {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_ensure_iconify_icon_cached(FfiConverterString.lower(`workspaceRoot`),FfiConverterString.lower(`id`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterOptionalString.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
+
         /**
          * See `guicons_core::manifest_path_for_rust_file` - this is a thin
          * UniFFI-string wrapper over it, shared with `guicons-lsp`'s own
@@ -1510,6 +1807,21 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_find_manifest_for_rust_file(
         FfiConverterString.lower(`rustFilePath`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Every entry in `manifest_path`, for icon-browser UIs that let a user
+         * pick from what's already declared rather than typing a selector from
+         * memory - the sibling read to [`resolve_family_variant`]'s single-entry
+         * lookup.
+         */ fun `listManifestEntries`(`manifestPath`: kotlin.String): ListManifestEntriesOutcome {
+            return FfiConverterTypeListManifestEntriesOutcome.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_list_manifest_entries(
+        FfiConverterString.lower(`manifestPath`),_status)
 }
     )
     }
@@ -1557,5 +1869,24 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
     )
     }
     
+
+        /**
+         * Same `/search` endpoint iconify.design's own site search uses - empty
+         * `Vec` on a network failure, not an error, since this only ever backs a
+         * best-effort browse/search UI.
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `searchIconifyIcons`(`query`: kotlin.String, `limit`: kotlin.UInt) : List<kotlin.String> {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_search_iconify_icons(FfiConverterString.lower(`query`),FfiConverterUInt.lower(`limit`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceString.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
 
 

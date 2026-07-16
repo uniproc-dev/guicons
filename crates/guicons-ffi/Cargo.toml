@@ -16,7 +16,9 @@ required-features = ["uniffi/cli"]
 
 [dependencies]
 guicons-core = { path = "../guicons-core" }
-uniffi = "0.28"
+guicons-net = { path = "../guicons-net" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+uniffi = { version = "0.28", features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

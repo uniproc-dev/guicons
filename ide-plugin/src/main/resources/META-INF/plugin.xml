@@ -29,5 +29,11 @@
              comment for why the two providers above still aren't enough
              for a string-literal macro argument. -->
         <action id="QuickJavaDoc" class="dev.guicons.ideaplugin.GuiconsQuickDocAction" overrides="true"/>
+
+        <action id="dev.guicons.idea-plugin.OpenIconBrowser"
+                class="dev.guicons.ideaplugin.OpenIconBrowserAction"
+                text="Browse Guicons Icons...">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>

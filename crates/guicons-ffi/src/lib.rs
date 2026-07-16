@@ -9,7 +9,7 @@ uniffi::setup_scaffolding!();
 
 use guicons_core::rust_macro::MacroKind as CoreMacroKind;
 use guicons_core::selector::IconSelector as CoreIconSelector;
-use guicons_core::IconEntrySource;
+use guicons_core::{IconEntry, IconEntrySource, IconManifest};
 use std::path::Path;
 
 #[derive(uniffi::Enum)]
@@ -102,6 +102,16 @@ pub struct ResolvedEntry {
     /// also need `guicons-net`'s cache/fetch logic ported over, which
     /// this crate deliberately doesn't do yet.
     pub source_file: Option<String>,
+    /// The manifest file this entry was actually declared in - the root
+    /// `icons.gui.toml`, or one of its `[link]`d files, rendered for
+    /// display (relative when possible). Distinct from `source_file` (the
+    /// icon *asset*, e.g. an `.svg`) - this is where the
+    /// `[family]`/`[family.variant]` table itself lives.
+    pub declared_in_file: String,
+    /// Same file as `declared_in_file`, but the raw absolute path - for a
+    /// caller that wants to actually open it (e.g. a "declared in" link),
+    /// not just show it.
+    pub declared_in_file_path: String,
 }
 
 #[derive(uniffi::Enum)]
@@ -113,6 +123,28 @@ pub enum ResolveOutcome {
     /// apart from "your `icons.gui.toml` is broken", which would otherwise
     /// both look like a missing entry.
     ManifestInvalid { errors: Vec<String> },
+}
+
+fn describe_entry(entry: &IconEntry, manifest: &IconManifest) -> ResolvedEntry {
+    let (source_description, source_file) = match entry.source() {
+        IconEntrySource::File(path) => {
+            (format!("file `{}`", manifest.display_path(path)), Some(path.to_string_lossy().into_owned()))
+        }
+        IconEntrySource::Iconify(id) => (format!("iconify `{id}`"), None),
+        IconEntrySource::Url(url) => (format!("url `{url}`"), None),
+        IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None),
+    };
+
+    ResolvedEntry {
+        key: entry.key().to_string(),
+        family: entry.family().to_string(),
+        size: entry.size(),
+        variant: entry.variant().map(str::to_string),
+        source_description,
+        source_file,
+        declared_in_file: manifest.display_path(entry.file()),
+        declared_in_file_path: entry.file().to_string_lossy().into_owned(),
+    }
 }
 
 /// Loads `manifest_path` and looks up the entry matching
@@ -136,23 +168,89 @@ pub fn resolve_family_variant(
         return ResolveOutcome::NotFound;
     };
 
-    let (source_description, source_file) = match entry.source() {
-        IconEntrySource::File(path) => {
-            (format!("file `{}`", manifest.display_path(path)), Some(path.to_string_lossy().into_owned()))
-        }
-        IconEntrySource::Iconify(id) => (format!("iconify `{id}`"), None),
-        IconEntrySource::Url(url) => (format!("url `{url}`"), None),
-        IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None),
-    };
+    ResolveOutcome::Found(describe_entry(entry, &manifest))
+}
 
-    ResolveOutcome::Found(ResolvedEntry {
-        key: entry.key().to_string(),
-        family: entry.family().to_string(),
-        size: entry.size(),
-        variant: entry.variant().map(str::to_string),
-        source_description,
-        source_file,
+#[derive(uniffi::Enum)]
+pub enum ListManifestEntriesOutcome {
+    Found { entries: Vec<ResolvedEntry> },
+    ManifestInvalid { errors: Vec<String> },
+}
+
+/// Every entry in `manifest_path`, for icon-browser UIs that let a user
+/// pick from what's already declared rather than typing a selector from
+/// memory - the sibling read to [`resolve_family_variant`]'s single-entry
+/// lookup.
+#[uniffi::export]
+pub fn list_manifest_entries(manifest_path: String) -> ListManifestEntriesOutcome {
+    let (manifest, errors) = guicons_core::load_icon_manifest(Path::new(&manifest_path));
+    if !errors.is_empty() {
+        return ListManifestEntriesOutcome::ManifestInvalid { errors: errors.iter().map(ToString::to_string).collect() };
+    }
+
+    let entries = manifest.entries().iter().map(|entry| describe_entry(entry, &manifest)).collect();
+    ListManifestEntriesOutcome::Found { entries }
+}
+
+// Everything below talks to api.iconify.design - `async`, not the plain
+// synchronous style the rest of this crate uses, so a blocking network
+// call on the Kotlin side can't ever freeze the caller's coroutine
+// dispatcher. UniFFI turns an `async fn` into a Kotlin `suspend fun`
+// itself (the foreign side supplies the executor/polls the future) -
+// `async_runtime = "tokio"` just gives this crate's side a runtime to
+// hand the actual blocking `ureq` call off to via `spawn_blocking`,
+// since `guicons_net`'s HTTP client is synchronous.
+
+/// Icon names already cached on disk for `provider` - empty if its
+/// collection hasn't been fetched yet (see [`download_iconify_collection`]).
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn cached_iconify_collection_names(workspace_root: String, provider: String) -> Vec<String> {
+    tokio::task::spawn_blocking(move || guicons_net::cached_collection_names(Path::new(&workspace_root), &provider))
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Downloads `provider`'s full collection listing into the cache if it
+/// isn't there already - `true` once it's cached (whether it already was,
+/// or this fetch succeeded), `false` on a network failure.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn download_iconify_collection(workspace_root: String, provider: String) -> bool {
+    tokio::task::spawn_blocking(move || guicons_net::download_collection(Path::new(&workspace_root), &provider))
+        .await
+        .unwrap_or(false)
+}
+
+/// Same `/search` endpoint iconify.design's own site search uses - empty
+/// `Vec` on a network failure, not an error, since this only ever backs a
+/// best-effort browse/search UI.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn search_iconify_icons(query: String, limit: u32) -> Vec<String> {
+    tokio::task::spawn_blocking(move || guicons_net::search_icons(&query, limit as usize))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+}
+
+/// Ensures `id` (`"prefix:name"`) is cached on disk, downloading it if
+/// needed - the local `.svg` path once it's there, `None` on a network
+/// failure.
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn ensure_iconify_icon_cached(workspace_root: String, id: String) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        let path = guicons_net::iconify_cache_path(Path::new(&workspace_root), &id);
+        if path.exists() {
+            return Some(path);
+        }
+        guicons_net::download(&guicons_net::iconify_url(&id), &path).ok()?;
+        Some(path)
     })
+    .await
+    .ok()
+    .flatten()
+    .map(|path| path.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

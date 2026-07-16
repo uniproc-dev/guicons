@@ -70,6 +70,72 @@ pub fn iconify_url(id: &str) -> String {
     format!("https://api.iconify.design/{set}/{name}.svg")
 }
 
+pub fn collection_cache_path(workspace_root: &Path, provider: &str) -> PathBuf {
+    workspace_cache_dir(workspace_root).join("_collections").join(format!("{provider}.json"))
+}
+
+fn collection_url(provider: &str) -> String {
+    format!("https://api.iconify.design/collection?prefix={provider}&pretty=0")
+}
+
+/// Icon names already cached on disk for `provider`, or `None` if its
+/// collection hasn't been fetched yet.
+pub fn cached_collection_names(workspace_root: &Path, provider: &str) -> Option<Vec<String>> {
+    let content = fs::read_to_string(collection_cache_path(workspace_root, provider)).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    Some(flatten_names(&json))
+}
+
+/// Downloads `provider`'s full collection listing into the cache if it
+/// isn't there already - `true` if it's cached by the time this returns
+/// (whether it already was, or this fetch succeeded), `false` on a
+/// network failure.
+pub fn download_collection(workspace_root: &Path, provider: &str) -> bool {
+    let dest = collection_cache_path(workspace_root, provider);
+    if dest.exists() {
+        return true;
+    }
+    download(&collection_url(provider), &dest).is_ok()
+}
+
+/// `{"uncategorized": [...], "categories": {"...": [...]}}` (the shape
+/// `api.iconify.design/collection` responds with) flattened into one list
+/// - which field(s) a given icon set uses varies per provider.
+fn flatten_names(json: &serde_json::Value) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(list) = json.get("uncategorized").and_then(serde_json::Value::as_array) {
+        names.extend(list.iter().filter_map(serde_json::Value::as_str).map(str::to_string));
+    }
+    if let Some(categories) = json.get("categories").and_then(serde_json::Value::as_object) {
+        for list in categories.values().filter_map(serde_json::Value::as_array) {
+            names.extend(list.iter().filter_map(serde_json::Value::as_str).map(str::to_string));
+        }
+    }
+    names
+}
+
+/// Searches across every icon set via `api.iconify.design/search` - the
+/// same endpoint iconify.design's own site search uses, so this mirrors
+/// its behavior (fuzzy matching, etc.) rather than reimplementing any of
+/// it here.
+pub fn search_icons(query: &str, limit: usize) -> Result<Vec<String>, DownloadError> {
+    let url = format!("https://api.iconify.design/search?query={query}&limit={limit}");
+    let response = ureq::get(&url).call().map_err(|e| DownloadError(format!("Failed to search `{query}`: {e}")))?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| DownloadError(format!("Failed to read search response for `{query}`: {e}")))?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| DownloadError(format!("Failed to parse search response for `{query}`: {e}")))?;
+    let icons = json
+        .get("icons")
+        .and_then(serde_json::Value::as_array)
+        .map(|list| list.iter().filter_map(serde_json::Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default();
+    Ok(icons)
+}
+
 fn split_iconify_id(id: &str) -> (&str, &str) {
     id.split_once(':')
         .unwrap_or_else(|| panic!("Iconify source must be `<set>:<name>`, got `{id}`"))

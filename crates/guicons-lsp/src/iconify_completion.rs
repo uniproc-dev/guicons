@@ -1,5 +1,7 @@
 //! Provider-name/icon-name completion for `iconify = "..."` values,
-//! backed by a disk cache of api.iconify.design's collection listings.
+//! backed by a disk cache of api.iconify.design's collection listings
+//! (the cache-path/parsing logic itself lives in `guicons_net`, shared
+//! with `guicons-ffi`'s icon-browser use of the same cache).
 //!
 //! Warmed entirely in the background ([`warm_provider_caches`]) - never
 //! from `completion()` itself, which only ever reads whatever is already
@@ -7,7 +9,6 @@
 //! completion for it is simply empty this time; there's no blocking
 //! network call hiding inside a completion request.
 
-use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::notification::Progress;
@@ -18,45 +19,16 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::Client;
 
-fn collection_cache_path(workspace_root: &Path, provider: &str) -> PathBuf {
-    workspace_root.join(".cache").join("guicons").join("_collections").join(format!("{provider}.json"))
-}
-
-fn collection_url(provider: &str) -> String {
-    format!("https://api.iconify.design/collection?prefix={provider}&pretty=0")
-}
-
 /// Icon names already cached on disk for `provider`, or `None` if its
 /// collection hasn't been warmed (or fetched) yet.
 pub fn cached_names(workspace_root: &Path, provider: &str) -> Option<Vec<String>> {
-    let content = fs::read_to_string(collection_cache_path(workspace_root, provider)).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    Some(flatten_names(&json))
-}
-
-/// `{"uncategorized": [...], "categories": {"...": [...]}}` (the shape
-/// `api.iconify.design/collection` responds with) flattened into one list
-/// - which field(s) a given icon set uses varies per provider.
-fn flatten_names(json: &serde_json::Value) -> Vec<String> {
-    let mut names = Vec::new();
-    if let Some(list) = json.get("uncategorized").and_then(serde_json::Value::as_array) {
-        names.extend(list.iter().filter_map(serde_json::Value::as_str).map(str::to_string));
-    }
-    if let Some(categories) = json.get("categories").and_then(serde_json::Value::as_object) {
-        for list in categories.values().filter_map(serde_json::Value::as_array) {
-            names.extend(list.iter().filter_map(serde_json::Value::as_str).map(str::to_string));
-        }
-    }
-    names
+    guicons_net::cached_collection_names(workspace_root, provider)
 }
 
 async fn warm_one(workspace_root: &Path, provider: &str) {
-    let dest = collection_cache_path(workspace_root, provider);
-    if dest.exists() {
-        return;
-    }
-    let url = collection_url(provider);
-    let _ = tokio::task::spawn_blocking(move || guicons_net::download(&url, &dest)).await;
+    let workspace_root = workspace_root.to_path_buf();
+    let provider = provider.to_string();
+    let _ = tokio::task::spawn_blocking(move || guicons_net::download_collection(&workspace_root, &provider)).await;
 }
 
 /// Spawns background warmup for every name in `providers` (deduplicated
