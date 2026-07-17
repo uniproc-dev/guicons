@@ -4,8 +4,13 @@ import com.intellij.openapi.application.EDT
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
+import com.intellij.openapi.editor.colors.EditorColors
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
+import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.HighlighterTargetArea
+import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.ide.CopyPasteManager
@@ -363,14 +368,26 @@ private fun openFile(project: Project, path: String) {
     FileEditorManager.getInstance(project).openFile(file, true)
 }
 
-/** Selects `entry`'s own span in whichever editor already has its
+/** One highlighter per editor at a time - each new selection replaces
+ * whatever this same editor was showing before, rather than accumulating
+ * a permanent marker per entry ever browsed to. */
+private val activeManifestHighlighters = HashMap<Editor, RangeHighlighter>()
+
+/** Marks `entry`'s own span in whichever editor already has its
  * declaring file open - the root manifest, or the specific `[link]`d
  * file this particular entry actually lives in - without opening it if
  * it isn't (unlike [openFile]/the "Declared in" link, this fires on
  * every tree selection change, not an explicit click - forcing a new
  * editor tab open just from browsing the tree would be far too
- * aggressive). Doesn't steal focus from the tree either, for the same
- * reason. */
+ * aggressive).
+ *
+ * A real `selectionModel` selection (what this used to do) reads as the
+ * user's own manual text selection, not a passive "here's what this
+ * points at" marker, and doesn't belong moving on every tree click - a
+ * `RangeHighlighter` with the platform's own search-result-style
+ * attributes is the same visual language `EditorColors.SEARCH_RESULT_ATTRIBUTES`
+ * gives every other "point at this range" feature in the IDE, and it
+ * doesn't touch the caret or steal focus from the tree either. */
 private fun highlightEntryIfFileOpen(project: Project, entry: ResolvedEntry) {
     val fileManager = FileEditorManager.getInstance(project)
     val file = LocalFileSystem.getInstance().refreshAndFindFileByPath(stripWindowsVerbatimPrefix(entry.declaredInFilePath)) ?: return
@@ -379,9 +396,13 @@ private fun highlightEntryIfFileOpen(project: Project, entry: ResolvedEntry) {
     val length = editor.document.textLength
     val start = entry.declaredInSpanStart.toInt().coerceIn(0, length)
     val end = entry.declaredInSpanEnd.toInt().coerceIn(start, length)
-    editor.selectionModel.setSelection(start, end)
-    editor.caretModel.moveToOffset(start)
-    editor.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
+
+    activeManifestHighlighters.remove(editor)?.let { editor.markupModel.removeHighlighter(it) }
+    val attributes = EditorColorsManager.getInstance().globalScheme.getAttributes(EditorColors.SEARCH_RESULT_ATTRIBUTES)
+    val highlighter = editor.markupModel.addRangeHighlighter(start, end, HighlighterLayer.SELECTION - 1, attributes, HighlighterTargetArea.EXACT_RANGE)
+    activeManifestHighlighters[editor] = highlighter
+
+    editor.scrollingModel.scrollTo(editor.offsetToLogicalPosition(start), ScrollType.MAKE_VISIBLE)
 }
 
 /** One `Label: value` row - clickable (opens `linkTarget` in the editor)

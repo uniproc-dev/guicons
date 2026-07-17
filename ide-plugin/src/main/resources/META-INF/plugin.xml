@@ -11,6 +11,7 @@
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lsp</depends>
     <depends>com.jetbrains.rust</depends>
 
     <extensions defaultExtensionNs="com.intellij">
@@ -30,6 +31,7 @@
                     icon="/icons/guiconsToolWindow.svg"
                     factoryClass="dev.guicons.ideaplugin.IconBrowserToolWindowFactory"/>
         <postStartupActivity implementation="dev.guicons.ideaplugin.IconBrowserStartupActivity"/>
+        <platform.lsp.serverSupportProvider implementation="dev.guicons.ideaplugin.GuiconsLspServerSupportProvider"/>
     </extensions>
 
     <actions>

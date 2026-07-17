@@ -29,3 +29,71 @@ variants = ["fill"]
 
 [tabler]
 variants = ["filled"]
+
+[ion]
+variants = ["outline", "sharp"]
+
+[octicon]
+sizes = [16, 24]
+
+[mingcute]
+variants = ["fill", "line"]
+
+[teenyicons]
+variants = ["outline", "solid"]
+
+[eva]
+variants = ["fill", "outline"]
+
+[solar]
+variants = ["bold", "bold-duotone", "broken", "line-duotone", "linear", "outline"]
+
+[material-symbols-light]
+variants = ["outline", "rounded", "sharp", "outline-rounded", "outline-sharp"]
+
+# `outline` only, not the whole style axis every other builtin schema tries
+# to cover - most of mdi's ~7.4k icons have no variant at all, "outline" is
+# a minority-coverage extra some icons happen to also have. Still safe: an
+# id with no `-outline` suffix just resolves with `variant: None`, same as
+# it always did.
+[mdi]
+variants = ["outline"]
+
+[ri]
+variants = ["fill", "line"]
+
+[boxicons]
+variants = ["filled"]
+
+[glyphs]
+variants = ["bold", "duo", "outline"]
+
+# `line`/`solid` only - `clarity` also stacks `-alerted`/`-badged` onto
+# either one (`analytics-solid-alerted`), a second, independent axis this
+# schema model doesn't represent. Those compound ids just won't decompose,
+# same safe "falls through to a flat family" behavior as any other
+# unmodeled suffix.
+[clarity]
+variants = ["line", "solid"]
+
+[f7]
+variants = ["fill"]
+
+[devicon]
+variants = ["wordmark"]
+
+[mage]
+variants = ["fill"]
+
+[token-branded]
+variants = ["background"]
+
+# Google's Material Icons, but note the *provider name* here is `ic` -
+# variants lead the name (`ic:outline-home`), not trail it
+# (`home-outline`), the one builtin schema so far where that's true - see
+# `decompose_iconify_id`'s prefix-matching fallback.
+[ic]
+variants = ["baseline", "outline", "round", "sharp", "twotone"]
+
+[si]
+variants = ["duotone", "fill", "line"]

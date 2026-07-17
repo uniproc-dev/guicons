@@ -26,8 +26,9 @@ crates and the `iconify` crate.
 - **One manifest, `icons.gui.toml`**: family/variant/size axes,
   `[link] includes = [...]` to split across files, `[defaults]` for shared root/
   provider/size, `[providers.<name>]` schemas (built-in for Fluent,
-  Phosphor, Material Symbols, Heroicons, Bootstrap Icons, Tabler, with
-  per-field `.override`).
+  Phosphor, Material Symbols, Heroicons, Bootstrap Icons, Tabler, Ionicons,
+  Octicons, MingCute, Teenyicons, Eva Icons, and Solar, with per-field
+  `.override`).
 - **Any source, mixed freely**: local file, URL, iconify.design id
   (auto-fetched and cached offline), or a font glyph
   (`font-family:codepoint`).

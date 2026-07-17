@@ -1147,3 +1147,161 @@ async fn initialize_reads_the_report_toml_syntax_errors_option() {
 
     assert!(service.inner().reports_toml_syntax_errors());
 }
+
+/// "Find usages" from a manifest entry - the reverse of goto-definition:
+/// selecting `[docker]` in `icons.gui.toml` should find every `icon!`-
+/// family call site across the workspace that resolves to it, and none
+/// that resolve to an unrelated entry of the same family name in another
+/// crate's manifest.
+#[tokio::test]
+async fn references_on_a_manifest_entry_finds_every_matching_macro_call_site() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "docker.svg", "<svg/>");
+    let manifest_content = "[docker]\nfile = \"docker.svg\"\n";
+    let manifest_path = write(dir.path(), "icons.gui.toml", manifest_content);
+    let manifest_uri = file_uri(&manifest_path);
+
+    let rs_content = "fn a() { let _ = icon!(docker); }\nfn b() { let _ = icon_key!(docker); }\nfn c() { let _ = println!(\"docker\"); }\n";
+    write(dir.path(), "main.rs", rs_content);
+
+    // An unrelated crate elsewhere in the workspace, with its own `docker`
+    // family - its own `icon!(docker)` call must never show up as a usage
+    // of the first crate's entry.
+    let other_crate = dir.path().join("other-crate");
+    fs::create_dir_all(&other_crate).unwrap();
+    write(&other_crate, "Cargo.toml", "[package]\nname = \"other\"\nversion = \"0.0.0\"\n");
+    write(&other_crate, "docker.svg", "<svg/>");
+    write(&other_crate, "icons.gui.toml", "[docker]\nfile = \"docker.svg\"\n");
+    write(&other_crate, "main.rs", "fn f() { let _ = icon!(docker); }\n");
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": manifest_uri, "languageId": "toml", "version": 1, "text": manifest_content }
+        })),
+        None,
+    )
+    .await;
+
+    // On the `file = "docker.svg"` line, not the `[docker]` header line -
+    // `IconEntry::span()` covers only the entry's own table body, matching
+    // `goto_definition_on_an_icon_macro_call_jumps_to_the_manifest_entry`'s
+    // same choice of position.
+    let offset = manifest_content.find("docker.svg").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/references",
+        Some(json!({
+            "textDocument": { "uri": manifest_uri },
+            "position": { "line": 1, "character": offset - manifest_content.find('\n').unwrap() - 1 },
+            "context": { "includeDeclaration": false }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("references response");
+
+    let locations = result.as_array().expect("array of locations");
+    assert_eq!(locations.len(), 2, "{locations:?}");
+    for location in locations {
+        let target = location["uri"].as_str().expect("location uri");
+        let target_path = Url::parse(target).unwrap().to_file_path().unwrap();
+        assert_eq!(fs::canonicalize(target_path).unwrap(), fs::canonicalize(dir.path().join("main.rs")).unwrap());
+    }
+}
+
+/// Renaming a family from its `[docker]` header edits the header itself,
+/// a sibling `[docker.24]` header for the same family at a different size,
+/// and both call sites in `main.rs` (dotted-path and quoted-literal form)
+/// - but not the unrelated `docker` family declared in another crate's own
+/// manifest.
+#[tokio::test]
+async fn rename_on_a_manifest_entry_edits_every_header_and_call_site() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "docker-16.svg", "<svg/>");
+    write(dir.path(), "docker-24.svg", "<svg/>");
+    // Two size-specific entries of the same family, no bare `[docker]` -
+    // `[docker]` and `[docker.24]` can't coexist (`24` would be an
+    // unexpected field on the flat `[docker]` entry), so this is the
+    // shape a family actually takes when split across sizes.
+    let manifest_content = "[docker.16]\nfile = \"docker-16.svg\"\n\n[docker.24]\nfile = \"docker-24.svg\"\n";
+    let manifest_path = write(dir.path(), "icons.gui.toml", manifest_content);
+    let manifest_uri = file_uri(&manifest_path);
+
+    let rs_content = "fn a() { let _ = icon!(docker.16); }\nfn b() { let _ = icon_key!(\"docker/24\"); }\n";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+
+    let other_crate = dir.path().join("other-crate");
+    fs::create_dir_all(&other_crate).unwrap();
+    write(&other_crate, "Cargo.toml", "[package]\nname = \"other\"\nversion = \"0.0.0\"\n");
+    write(&other_crate, "docker.svg", "<svg/>");
+    write(&other_crate, "icons.gui.toml", "[docker]\nfile = \"docker.svg\"\n");
+    let other_rs_content = "fn f() { let _ = icon!(docker); }\n";
+    write(&other_crate, "main.rs", other_rs_content);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    call(
+        &mut service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": manifest_uri, "languageId": "toml", "version": 1, "text": manifest_content }
+        })),
+        None,
+    )
+    .await;
+
+    // On the `[docker]` header line itself - unlike references/goto's entry-
+    // body span, rename triggers from the header (`single_segment_family_header_at`).
+    let offset = manifest_content.find("docker").unwrap();
+    let result = call(
+        &mut service,
+        "textDocument/rename",
+        Some(json!({
+            "textDocument": { "uri": manifest_uri },
+            "position": { "line": 0, "character": offset },
+            "newName": "container"
+        })),
+        Some(2),
+    )
+    .await
+    .expect("rename response");
+
+    let changes = result["changes"].as_object().expect("workspace edit changes");
+    assert_eq!(changes.len(), 2, "{changes:?}");
+
+    let manifest_edits = changes.get(manifest_uri.as_str()).expect("manifest edit present").as_array().unwrap();
+    assert_eq!(manifest_edits.len(), 2, "should rename both [docker.16] and [docker.24]: {manifest_edits:?}");
+    for edit in manifest_edits {
+        assert_eq!(edit["newText"], "container");
+    }
+
+    let rs_uri = file_uri(&rs_path);
+    let rs_edits = changes.get(rs_uri.as_str()).expect("main.rs edit present").as_array().unwrap();
+    assert_eq!(rs_edits.len(), 2, "{rs_edits:?}");
+    let new_texts: Vec<&str> = rs_edits.iter().map(|edit| edit["newText"].as_str().unwrap()).collect();
+    assert!(new_texts.contains(&"container.16"), "{new_texts:?}");
+    assert!(new_texts.contains(&"\"container/24\""), "{new_texts:?}");
+
+    let other_crate_rs_uri = file_uri(&other_crate.join("main.rs"));
+    assert!(!changes.contains_key(other_crate_rs_uri.as_str()), "must not touch the unrelated crate's own docker family");
+}

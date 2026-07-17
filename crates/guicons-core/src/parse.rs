@@ -564,18 +564,38 @@ pub fn decompose_iconify_id(
 
     let segments: Vec<&str> = name.split('-').collect();
 
+    // Suffix-style first (`home-outline`, most providers) - longest
+    // match wins, so a compound entry like `outline-rounded` in the
+    // schema is preferred over a shorter `outline` that also happens to
+    // match. Falls back to prefix-style (`outline-home` - Material
+    // Icons' `ic` provider names it this way, `baseline`/`outline`/
+    // `round`/`sharp`/`twotone` all leading, never trailing) only if no
+    // suffix matched at all - a provider that's genuinely suffix-style
+    // has no valid reason for its variant vocabulary to also appear as a
+    // leading segment of an unrelated icon name, so trying prefix
+    // unconditionally would risk misparsing e.g. an icon whose name
+    // itself starts with a word that happens to be in another
+    // provider's variant vocabulary copied in by `.override`.
     let mut variant: Option<String> = None;
-    let mut remaining = segments.len();
+    let mut family_segments: Vec<&str> = segments.clone();
     for suffix_len in (1..=segments.len()).rev() {
         let candidate = segments[segments.len() - suffix_len..].join("-");
         if schema.variants.iter().any(|known| *known == candidate) {
             variant = Some(candidate);
-            remaining = segments.len() - suffix_len;
+            family_segments = segments[..segments.len() - suffix_len].to_vec();
             break;
         }
     }
-
-    let mut family_segments = segments[..remaining].to_vec();
+    if variant.is_none() {
+        for prefix_len in (1..segments.len()).rev() {
+            let candidate = segments[..prefix_len].join("-");
+            if schema.variants.iter().any(|known| *known == candidate) {
+                variant = Some(candidate);
+                family_segments = segments[prefix_len..].to_vec();
+                break;
+            }
+        }
+    }
 
     let mut size: Option<u16> = None;
     if let Some(last) = family_segments.last() {

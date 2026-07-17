@@ -68,6 +68,26 @@ fn display_path(path: &Path) -> String {
     rendered.strip_prefix(r"\\?\").unwrap_or(&rendered).to_string()
 }
 
+/// `\r\n` -> `\n` (and a bare `\r` -> `\n`, for old Mac-style line endings)
+/// - every byte offset [`toml_span`] hands back (`IconEntry::span()`, used
+/// for editor tooling that maps a cursor position back to an entry) has to
+/// be computed against the *same* text an editor's own offsets are in.
+/// `fs::read_to_string` returns whatever's actually on disk, `\r\n` and
+/// all on a Windows checkout (`core.autocrlf` et al.) - but
+/// `com.intellij.openapi.editor.Document.getText()` always normalizes to
+/// bare `\n` internally regardless of the file's on-disk line separator.
+/// Without this, every span past the first line ending drifts further
+/// off by one byte per preceding `\r` - not a rounding error, a real bug
+/// that put the IDE plugin's caret-sync highlight visibly in the wrong
+/// place. `content_override` (an already-open editor's own buffer text)
+/// is never touched here - it's already in the normalized form.
+fn normalize_line_endings(content: &str) -> String {
+    if !content.contains('\r') {
+        return content.to_string();
+    }
+    content.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// Builds the [`ManifestGraph`] rooted at `manifest_path` - reads every
 /// file reachable through `[link].includes`, validating only what's
 /// needed to know the graph's shape (recursive-include detection, `[link]`
@@ -110,7 +130,7 @@ fn discover(
 
     let content = match content_override {
         Some(content) => content.to_string(),
-        None => match fs::read_to_string(&manifest_path) {
+        None => match fs::read_to_string(&manifest_path).map(|content| normalize_line_endings(&content)) {
             Ok(content) => content,
             Err(e) => {
                 errors.push(ManifestError {

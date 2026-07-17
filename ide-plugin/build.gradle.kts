@@ -110,6 +110,7 @@ val repoRoot = layout.projectDirectory.dir("..").asFile
 val ffiCrateDir = repoRoot.resolve("crates/guicons-ffi")
 val ffiReleaseDll = repoRoot.resolve("target/release/guicons_ffi.dll")
 val uniffiBindingsOutDir = layout.buildDirectory.dir("generated/uniffi")
+val lspReleaseExe = repoRoot.resolve("target/release/guicons-lsp.exe")
 
 val cargoBuildFfi = tasks.register<Exec>("cargoBuildFfi") {
     description = "Builds ../crates/guicons-ffi in release mode"
@@ -147,7 +148,28 @@ val syncGeneratedBindings = tasks.register<Copy>("syncGeneratedBindings") {
     into(layout.projectDirectory.dir("src/main/kotlin/uniffi/guicons_ffi"))
 }
 
-tasks.named("processResources") { dependsOn(syncNativeLibrary) }
+// Bundles the `guicons-lsp` binary the same way `guicons_ffi.dll` is
+// bundled above - built once here, shipped inside the plugin's own
+// resources, so users never need it on PATH (mirrors how the Prisma ORM
+// IntelliJ plugin bundles its own language server rather than requiring
+// a system install).
+val cargoBuildLsp = tasks.register<Exec>("cargoBuildLsp") {
+    description = "Builds ../crates/guicons-lsp in release mode"
+    workingDir = repoRoot
+    commandLine("cargo", "build", "--release", "-p", "guicons-lsp")
+    inputs.dir(repoRoot.resolve("crates/guicons-lsp/src"))
+    inputs.dir(repoRoot.resolve("crates/guicons-core/src"))
+    outputs.file(lspReleaseExe)
+}
+
+val syncLspBinary = tasks.register<Copy>("syncLspBinary") {
+    description = "Copies the freshly built guicons-lsp binary into the plugin's resources"
+    dependsOn(cargoBuildLsp)
+    from(lspReleaseExe)
+    into(layout.projectDirectory.dir("src/main/resources/win32-x86-64"))
+}
+
+tasks.named("processResources") { dependsOn(syncNativeLibrary, syncLspBinary) }
 tasks.named("compileKotlin") { dependsOn(syncGeneratedBindings) }
 
 tasks {
