@@ -25,7 +25,7 @@
         <!-- Registered statically (not created on the fly by pinning a
              popup) so it's a permanent icon in the sidebar's tool window
              bar, always available - see IconBrowserToolWindowFactory. -->
-        <toolWindow id="Guicons Icons"
+        <toolWindow id="Guicons"
                     anchor="right"
                     icon="/icons/guiconsToolWindow.svg"
                     factoryClass="dev.guicons.ideaplugin.IconBrowserToolWindowFactory"/>
@@ -40,7 +40,7 @@
 
         <action id="dev.guicons.idea-plugin.OpenIconBrowser"
                 class="dev.guicons.ideaplugin.OpenIconBrowserAction"
-                text="Browse Guicons Icons...">
+                text="Browse Icons...">
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>

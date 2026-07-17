@@ -5,7 +5,7 @@ import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.wm.ToolWindowManager
 
 /**
- * Shows the "Guicons Icons" tool window ([IconBrowserToolWindowFactory])
+ * Shows the "Guicons" tool window ([IconBrowserToolWindowFactory])
  * as soon as a project opens, so it reads as a permanent, always-docked
  * part of the sidebar rather than something the user has to go find and
  * click open in the stripe first.

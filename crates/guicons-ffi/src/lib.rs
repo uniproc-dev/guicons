@@ -98,10 +98,15 @@ pub struct ResolvedEntry {
     /// hover already uses.
     pub source_description: String,
     /// Absolute path to the backing asset file - only present for a
-    /// `file` source. Rendering `iconify`/`url`/`glyph` sources would
-    /// also need `guicons-net`'s cache/fetch logic ported over, which
-    /// this crate deliberately doesn't do yet.
+    /// `file` source.
     pub source_file: Option<String>,
+    /// `"prefix:name"` - only present for an `iconify` source. A caller
+    /// that wants to preview one of these has to actually fetch/cache it
+    /// first (`guicons-net`'s job, not this crate's - see
+    /// `ensure_iconify_icon_cached`), same as the icon browser's own
+    /// Iconify tab already does for entries it finds by browsing/
+    /// searching rather than reading out of a manifest.
+    pub iconify_id: Option<String>,
     /// The manifest file this entry was actually declared in - the root
     /// `icons.gui.toml`, or one of its `[link]`d files, rendered for
     /// display (relative when possible). Distinct from `source_file` (the
@@ -126,13 +131,13 @@ pub enum ResolveOutcome {
 }
 
 fn describe_entry(entry: &IconEntry, manifest: &IconManifest) -> ResolvedEntry {
-    let (source_description, source_file) = match entry.source() {
+    let (source_description, source_file, iconify_id) = match entry.source() {
         IconEntrySource::File(path) => {
-            (format!("file `{}`", manifest.display_path(path)), Some(path.to_string_lossy().into_owned()))
+            (format!("file `{}`", manifest.display_path(path)), Some(path.to_string_lossy().into_owned()), None)
         }
-        IconEntrySource::Iconify(id) => (format!("iconify `{id}`"), None),
-        IconEntrySource::Url(url) => (format!("url `{url}`"), None),
-        IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None),
+        IconEntrySource::Iconify(id) => (format!("iconify `{id}`"), None, Some(id.clone())),
+        IconEntrySource::Url(url) => (format!("url `{url}`"), None, None),
+        IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None, None),
     };
 
     ResolvedEntry {
@@ -142,6 +147,7 @@ fn describe_entry(entry: &IconEntry, manifest: &IconManifest) -> ResolvedEntry {
         variant: entry.variant().map(str::to_string),
         source_description,
         source_file,
+        iconify_id,
         declared_in_file: manifest.display_path(entry.file()),
         declared_in_file_path: entry.file().to_string_lossy().into_owned(),
     }
@@ -190,6 +196,22 @@ pub fn list_manifest_entries(manifest_path: String) -> ListManifestEntriesOutcom
 
     let entries = manifest.entries().iter().map(|entry| describe_entry(entry, &manifest)).collect();
     ListManifestEntriesOutcome::Found { entries }
+}
+
+/// Every `icons.gui.toml` anywhere under `workspace_root` - a directory
+/// walk, not free, so `async` like the network-backed functions below (a
+/// caller building a reverse "which manifest owns this file" index over a
+/// whole workspace shouldn't have to do it on its own UI thread).
+#[uniffi::export(async_runtime = "tokio")]
+pub async fn list_workspace_manifests(workspace_root: String) -> Vec<String> {
+    tokio::task::spawn_blocking(move || {
+        guicons_core::find_manifest_files(Path::new(&workspace_root), &[])
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 // Everything below talks to api.iconify.design - `async`, not the plain

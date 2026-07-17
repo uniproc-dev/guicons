@@ -137,6 +137,14 @@ fn discover(
 
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
     for (ordinal, include) in includes.into_iter().enumerate() {
+        if !include.value.ends_with(".gui.toml") {
+            errors.push(ManifestError {
+                file: manifest_path.clone(),
+                span: Some(include.span.into()),
+                message: format!("`[link]` includes a file that isn't a `.gui.toml` manifest: `{}`", include.value),
+            });
+            continue;
+        }
         let child_path = resolve_entry_path(base, &include.value);
         if !child_path.exists() {
             errors.push(ManifestError {

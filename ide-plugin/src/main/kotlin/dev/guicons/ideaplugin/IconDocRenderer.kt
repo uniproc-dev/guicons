@@ -7,8 +7,10 @@ import uniffi.guicons_ffi.findManifestForRustFile
 import uniffi.guicons_ffi.macroCallAt
 import uniffi.guicons_ffi.parseSelector
 import uniffi.guicons_ffi.resolveFamilyVariant
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.Base64
+import javax.imageio.ImageIO
 
 /**
  * Shared HTML-popup rendering for an `icon!`/`icon_key!`/`icon_data!` call
@@ -63,6 +65,11 @@ object IconDocRenderer {
         }
     }
 
+    /** Renders onto an [IconPreviewCard] (same contrast-with-the-icon's-own-
+     * pixels logic as the icon browser popup's card) rather than embedding
+     * the raw icon bytes directly - an SVG with no fill set renders solid
+     * black, otherwise invisible against a doc popup that's dark-themed
+     * itself. */
     private fun renderPreview(asset: File): String? {
         if (!asset.isFile) return null
         val pngBytes = try {
@@ -74,7 +81,12 @@ object IconDocRenderer {
         } catch (_: Exception) {
             return null
         }
-        val base64 = Base64.getEncoder().encodeToString(pngBytes)
-        return "<img src=\"data:image/png;base64,$base64\" width=\"64\" height=\"64\"/>"
+        val image = ImageIO.read(ByteArrayInputStream(pngBytes)) ?: return null
+        val cardBytes = IconPreviewCard.renderCardPng(image, cardSize = CARD_SIZE, arc = CARD_ARC)
+        val base64 = Base64.getEncoder().encodeToString(cardBytes)
+        return "<img src=\"data:image/png;base64,$base64\" width=\"$CARD_SIZE\" height=\"$CARD_SIZE\"/>"
     }
+
+    private const val CARD_SIZE = 80
+    private const val CARD_ARC = 16
 }

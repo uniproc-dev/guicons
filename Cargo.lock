@@ -2470,6 +2470,7 @@ dependencies = [
  "syn",
  "tempfile",
  "toml-span",
+ "walkdir",
  "winnow 0.7.15",
 ]
 

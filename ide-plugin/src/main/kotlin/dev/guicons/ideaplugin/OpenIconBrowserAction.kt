@@ -6,7 +6,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 
 /**
- * Editor right-click menu entry ("Browse Guicons Icons...") - opens
+ * Editor right-click menu entry ("Browse Icons...") - opens
  * [IconBrowserPopup], the opposite direction from Quick Doc: instead of
  * showing what an already-written `icon!(...)` call resolves to, lets the
  * user find an icon (from the current crate's manifest, or from

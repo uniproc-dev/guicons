@@ -736,6 +736,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -761,6 +763,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_list_manifest_entries(`manifestPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_guicons_ffi_fn_func_list_workspace_manifests(`workspaceRoot`: RustBuffer.ByValue,
+    ): Long
     fun uniffi_guicons_ffi_fn_func_macro_call_at(`text`: RustBuffer.ByValue,`offset`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_parse_selector(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -891,6 +895,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_guicons_ffi_checksum_func_list_manifest_entries(
     ): Short
+    fun uniffi_guicons_ffi_checksum_func_list_workspace_manifests(
+    ): Short
     fun uniffi_guicons_ffi_checksum_func_macro_call_at(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_parse_selector(
@@ -929,6 +935,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_list_manifest_entries() != 11244.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_list_workspace_manifests() != 32975.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_macro_call_at() != 10220.toShort()) {
@@ -1218,11 +1227,18 @@ data class ResolvedEntry (
     var `sourceDescription`: kotlin.String, 
     /**
      * Absolute path to the backing asset file - only present for a
-     * `file` source. Rendering `iconify`/`url`/`glyph` sources would
-     * also need `guicons-net`'s cache/fetch logic ported over, which
-     * this crate deliberately doesn't do yet.
+     * `file` source.
      */
     var `sourceFile`: kotlin.String?, 
+    /**
+     * `"prefix:name"` - only present for an `iconify` source. A caller
+     * that wants to preview one of these has to actually fetch/cache it
+     * first (`guicons-net`'s job, not this crate's - see
+     * `ensure_iconify_icon_cached`), same as the icon browser's own
+     * Iconify tab already does for entries it finds by browsing/
+     * searching rather than reading out of a manifest.
+     */
+    var `iconifyId`: kotlin.String?, 
     /**
      * The manifest file this entry was actually declared in - the root
      * `icons.gui.toml`, or one of its `[link]`d files, rendered for
@@ -1254,6 +1270,7 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
         )
@@ -1266,6 +1283,7 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.allocationSize(value.`variant`) +
             FfiConverterString.allocationSize(value.`sourceDescription`) +
             FfiConverterOptionalString.allocationSize(value.`sourceFile`) +
+            FfiConverterOptionalString.allocationSize(value.`iconifyId`) +
             FfiConverterString.allocationSize(value.`declaredInFile`) +
             FfiConverterString.allocationSize(value.`declaredInFilePath`)
     )
@@ -1277,6 +1295,7 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.write(value.`variant`, buf)
             FfiConverterString.write(value.`sourceDescription`, buf)
             FfiConverterOptionalString.write(value.`sourceFile`, buf)
+            FfiConverterOptionalString.write(value.`iconifyId`, buf)
             FfiConverterString.write(value.`declaredInFile`, buf)
             FfiConverterString.write(value.`declaredInFilePath`, buf)
     }
@@ -1826,6 +1845,26 @@ public object FfiConverterSequenceTypeResolvedEntry: FfiConverterRustBuffer<List
     )
     }
     
+
+        /**
+         * Every `icons.gui.toml` anywhere under `workspace_root` - a directory
+         * walk, not free, so `async` like the network-backed functions below (a
+         * caller building a reverse "which manifest owns this file" index over a
+         * whole workspace shouldn't have to do it on its own UI thread).
+         */
+    @Suppress("ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
+     suspend fun `listWorkspaceManifests`(`workspaceRoot`: kotlin.String) : List<kotlin.String> {
+        return uniffiRustCallAsync(
+        UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_list_workspace_manifests(FfiConverterString.lower(`workspaceRoot`),),
+        { future, callback, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_poll_rust_buffer(future, callback, continuation) },
+        { future, continuation -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_complete_rust_buffer(future, continuation) },
+        { future -> UniffiLib.INSTANCE.ffi_guicons_ffi_rust_future_free_rust_buffer(future) },
+        // lift function
+        { FfiConverterSequenceString.lift(it) },
+        // Error FFI converter
+        UniffiNullRustCallStatusErrorHandler,
+    )
+    }
 
         /**
          * Finds the guicons macro call (if any) whose argument range contains

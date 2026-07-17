@@ -7,6 +7,7 @@
 mod diagnostics;
 mod graph;
 mod load;
+mod manifest_scan;
 mod model;
 mod naming;
 mod parse;
@@ -16,6 +17,7 @@ pub mod selector;
 
 pub use diagnostics::ManifestError;
 pub use load::{load_icon_manifest, load_icon_manifest_from_str, load_icon_manifest_or_panic};
+pub use manifest_scan::find_manifest_files;
 pub use model::{IconEntry, IconEntrySource, IconManifest, ProviderSchema};
 pub use naming::{rust_const_name, rust_fn_name};
 pub use parse::{builtin_provider_names, decompose_iconify_id, parse_glyph_spec, try_parse_glyph_spec};
