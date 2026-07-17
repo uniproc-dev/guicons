@@ -22,10 +22,17 @@ dependencies {
         // Points at the RustRover already installed locally instead of
         // having Gradle download a whole separate IDE distribution just to
         // compile against - `local()` takes the installation directory
-        // directly. Only works on this machine as-is; CI/another dev's
-        // machine would need either their own local path or switching back
-        // to `rustRover("<exact build>")` to fetch one.
-        local("C:/Program Files/JetBrains/RustRover 2025.2.3")
+        // directly, and is much faster for everyday iteration than a fresh
+        // download. Falls back to `rustRover(...)` (which does download a
+        // distribution) whenever that local path doesn't exist - CI runners
+        // and other devs' machines never have it, so this just works there
+        // without any of this file needing per-machine edits.
+        val localRustRoverPath = "C:/Program Files/JetBrains/RustRover 2025.2.3"
+        if (System.getenv("GUICONS_CI") == "true" || !file(localRustRoverPath).exists()) {
+            rustRover("2025.2.3")
+        } else {
+            local(localRustRoverPath)
+        }
         bundledPlugin("com.jetbrains.rust")
     }
 
@@ -84,6 +91,24 @@ intellijPlatform {
         ideaVersion {
             sinceBuild = "252"
         }
+    }
+
+    // Only exercised by the `signPlugin`/`publishPlugin` tasks, which only
+    // ever run in `.github/workflows/release-plugin.yml` (manually
+    // triggered) - these env vars are unset for any normal local build, so
+    // this has no effect on everyday `runIde`/`buildPlugin` use. Values
+    // come from a JetBrains Marketplace vendor account: `PUBLISH_TOKEN`
+    // from https://plugins.jetbrains.com/author/me/tokens, the signing
+    // trio from a self-generated certificate (see JetBrains' "Plugin
+    // Signing" docs) - none of this exists until that account is set up.
+    signing {
+        certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")
+        privateKey = providers.environmentVariable("PRIVATE_KEY")
+        password = providers.environmentVariable("PRIVATE_KEY_PASSWORD")
+    }
+
+    publishing {
+        token = providers.environmentVariable("PUBLISH_TOKEN")
     }
 }
 

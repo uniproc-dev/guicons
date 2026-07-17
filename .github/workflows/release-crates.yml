@@ -1,0 +1,58 @@
+name: Publish crates.io
+
+# Manual only, never on a push/tag - `cargo publish` is irreversible (a
+# version can be yanked but never deleted or overwritten), so this only
+# ever runs when a human explicitly clicks "Run workflow" in the Actions
+# tab and confirms the version. Requires a `CARGO_REGISTRY_TOKEN` repo
+# secret (an API token from https://crates.io/settings/tokens) before it
+# can do anything.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "publish" to confirm - this is irreversible'
+        required: true
+
+jobs:
+  publish:
+    if: github.event.inputs.confirm == 'publish'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Dependency order matters: each `cargo publish` below only succeeds
+      # once every path-dependency it names a `version` for (see each
+      # crate's Cargo.toml) is actually live on crates.io - a freshly
+      # published crate needs a few seconds to show up in the index, hence
+      # the wait between steps rather than firing them back to back.
+      - name: Publish guicons-core
+        run: cargo publish -p guicons-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: sleep 30
+
+      - name: Publish guicons-net
+        run: cargo publish -p guicons-net --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: sleep 30
+
+      - name: Publish guicons-macros
+        run: cargo publish -p guicons-macros --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: sleep 30
+
+      - name: Publish guicons-build
+        run: cargo publish -p guicons-build --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: sleep 30
+
+      - name: Publish guicons
+        run: cargo publish -p guicons --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - run: sleep 30
+
+      - name: Publish guicons-cli
+        run: cargo publish -p guicons-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "UniFFI bindings exposing guicons-core's icon!/icon_key!/icon_data! detection and resolution logic to non-Rust consumers (currently: ../ide-plugin's Kotlin/JVM side)"
+# JNA/UniFFI glue built specifically for ../ide-plugin - no independent
+# value on crates.io, and its cdylib ABI isn't something to accidentally
+# stabilize behind a published version.
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]

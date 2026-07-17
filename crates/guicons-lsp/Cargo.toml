@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Language server for icons.gui.toml"
+# Bundled directly into ../ide-plugin's own resources rather than
+# installed via `cargo install` - not published standalone for now
+# (there's no editor-agnostic install story for it yet beyond that).
+publish = false
 
 [[bin]]
 name = "guicons-lsp"
