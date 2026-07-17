@@ -48,19 +48,13 @@ crates and the `iconify` crate.
   your manifest in one command - paste an id like
   `fluent:settings-24-regular` and it figures out the right
   family/size/variant for you, no hand-editing TOML.
-- **LSP** (`guicons-lsp`): completion, hover, goto-definition, and
-  diagnostics for both `icons.gui.toml` itself (sections, entry fields,
-  provider names, cached iconify icon names, `[link] includes`
-  targets - with a "did you mean" suggestion for a near-miss file path)
-  and `icon!`/`icon_key!`/`icon_data!` call sites in your Rust code.
-  Editor-agnostic - works with any LSP client.
-- **RustRover/IntelliJ plugin**: Quick Doc (`Ctrl+Q`) renders the actual
-  resolved icon inline instead of just a text description; a permanent
-  sidebar tool window lets you browse your manifest (grouped by family,
-  including `[link]`d files) or search/browse iconify.design directly,
-  preview, and insert a reference at the caret with one click - caret
-  position and tree selection stay in sync both ways, whether you're
-  moving through Rust code or the manifest TOML itself.
+- **LSP** (`guicons-lsp`): completion, hover, goto-definition, find
+  usages, rename, and diagnostics, with navigation between `icons.gui.toml`
+  and your Rust code in both directions.
+- **RustRover/IntelliJ plugin**: a sidebar tool window showing your
+  manifest's structure, with icon previews and a built-in iconify.design
+  browser to search, preview, and insert a reference at the caret in one
+  click.
 
 ## Alternatives
 
