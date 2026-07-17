@@ -93,30 +93,37 @@ class IconBrowserToolWindowFactory : ToolWindowFactory {
         )
     }
 
-    /** An `.rs` file needs its own text editor to insert into and drives
-     * the tabs' content. A non-`.rs` file - a manifest itself, or one of
-     * its declared assets, anywhere in the workspace - doesn't get its own
-     * tabs, but shouldn't blank the browser out either: [ManifestIndex]
-     * decides that by looking the file up in a reverse index built from
-     * *every* manifest under the workspace root (an in-memory cache -
-     * [ManifestIndex.manifestFor] never touches disk itself, only the
-     * background [ManifestIndex.refresh] does), not just "whichever
-     * manifest was last shown" - a `[link] includes` entry or an asset's
-     * `source` can point anywhere on disk, and the workspace can have more
-     * than one crate/manifest in the first place.
+    /** An `.rs` file or a manifest file itself (the root `icons.gui.toml`,
+     * or one of its `[link]`d files - anything [ManifestIndex] resolves to
+     * a manifest, matched by name here rather than round-tripping through
+     * the index, since a manifest file trivially recognizes itself) both
+     * need their own text editor to drive the tabs' content and caret
+     * sync (see [buildIconBrowserTabs]) - a bare asset (`.svg`/`.png`)
+     * doesn't get its own tabs, but shouldn't blank the browser out
+     * either: [ManifestIndex] decides whether it's still relevant by
+     * looking it up in a reverse index built from *every* manifest under
+     * the workspace root (an in-memory cache - [ManifestIndex.manifestFor]
+     * never touches disk itself, only the background
+     * [ManifestIndex.refresh] does), not just "whichever manifest was
+     * last shown" - a `[link] includes` entry or an asset's `source` can
+     * point anywhere on disk, and the workspace can have more than one
+     * crate/manifest in the first place.
      *
      * A file that's neither doesn't get cleared either, once *something*
      * real has been shown at least once - switching to a scratch file, a
      * terminal tab, whatever, shouldn't blank out a browser the user was
      * actively using a moment ago. Only the very first selection, before
      * anything relevant has ever been found, falls through to the
-     * placeholder. */
+     * placeholder - previously that included the manifest itself, so the
+     * browser sat on the placeholder waiting for a `.rs` file even when
+     * the very first thing selected was already `icons.gui.toml`. */
     private fun showForCurrentFile(project: Project, toolWindow: ToolWindow, manifestIndex: ManifestIndex) {
         val content = toolWindow.contentManager.contents.firstOrNull() ?: return
         val editor = FileEditorManager.getInstance(project).selectedTextEditor
         val file = FileEditorManager.getInstance(project).selectedFiles.firstOrNull()
+        val isManifestFile = file != null && file.name.endsWith(".gui.toml") && manifestIndex.manifestFor(file.path) != null
         when {
-            editor != null && file != null && file.extension == "rs" -> {
+            editor != null && file != null && (file.extension == "rs" || isManifestFile) -> {
                 content.component = buildIconBrowserTabs(project, editor, file.path, vertical = true)
                 hasShownTabs = true
             }

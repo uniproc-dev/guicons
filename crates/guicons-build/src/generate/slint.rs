@@ -1,4 +1,5 @@
-use super::shared::{rust_variant_name, write_if_changed};
+use super::shared::write_if_changed;
+use guicons_core::rust_variant_name;
 use crate::materialize::{MaterializedIcon, MaterializedIconBackend};
 use std::path::Path;
 

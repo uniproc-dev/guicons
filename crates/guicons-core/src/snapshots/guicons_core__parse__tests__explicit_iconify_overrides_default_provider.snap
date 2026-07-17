@@ -13,7 +13,7 @@ expression: entries
         ),
         dynamic: false,
         windows_ico: None,
-        span: 47..60,
+        span: 36..60,
         file: "",
     },
 ]

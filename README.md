@@ -42,12 +42,24 @@ crates and the `iconify` crate.
   framework-agnostic `IconData`.
 - **Slint integration out of the box**, with a runnable example in
   `crates/guicons/examples/`.
-- **`icons` CLI** (`guicons-cli`): `icons fetch`/`update` to populate the
-  offline cache, `icons add <iconify-id|file>` to add an icon with one
-  command - it reverse-parses a pasted iconify id (e.g.
-  `fluent:settings-24-regular`) into family/size/variant using the
-  provider schema, and writes it into the manifest round-trip,
-  preserving the rest of the file's formatting/comments.
+- **`icons` CLI** (`guicons-cli`): `icons fetch`/`update` populates the
+  offline iconify cache; `icons add <iconify-id|file>` adds an icon to
+  your manifest in one command - paste an id like
+  `fluent:settings-24-regular` and it figures out the right
+  family/size/variant for you, no hand-editing TOML.
+- **LSP** (`guicons-lsp`): completion, hover, goto-definition, and
+  diagnostics for both `icons.gui.toml` itself (sections, entry fields,
+  provider names, cached iconify icon names, `[link] includes`
+  targets - with a "did you mean" suggestion for a near-miss file path)
+  and `icon!`/`icon_key!`/`icon_data!` call sites in your Rust code.
+  Editor-agnostic - works with any LSP client.
+- **RustRover/IntelliJ plugin**: Quick Doc (`Ctrl+Q`) renders the actual
+  resolved icon inline instead of just a text description; a permanent
+  sidebar tool window lets you browse your manifest (grouped by family,
+  including `[link]`d files) or search/browse iconify.design directly,
+  preview, and insert a reference at the caret with one click - caret
+  position and tree selection stay in sync both ways, whether you're
+  moving through Rust code or the manifest TOML itself.
 
 ## Alternatives
 

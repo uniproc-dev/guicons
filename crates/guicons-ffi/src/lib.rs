@@ -117,6 +117,14 @@ pub struct ResolvedEntry {
     /// caller that wants to actually open it (e.g. a "declared in" link),
     /// not just show it.
     pub declared_in_file_path: String,
+    /// UTF-8 byte offsets of this entry's own table within
+    /// `declared_in_file_path` (`IconEntry::span()`) - not just "which
+    /// file", but exactly where in it, for a caller that wants to
+    /// navigate straight to/highlight this entry in an already-open
+    /// editor on that file, the same offset convention
+    /// [`macro_call_at`]/[`entry_at_offset`] already use.
+    pub declared_in_span_start: u32,
+    pub declared_in_span_end: u32,
 }
 
 #[derive(uniffi::Enum)]
@@ -140,6 +148,7 @@ fn describe_entry(entry: &IconEntry, manifest: &IconManifest) -> ResolvedEntry {
         IconEntrySource::Glyph(spec) => (format!("glyph `{spec}`"), None, None),
     };
 
+    let span = entry.span();
     ResolvedEntry {
         key: entry.key().to_string(),
         family: entry.family().to_string(),
@@ -150,6 +159,8 @@ fn describe_entry(entry: &IconEntry, manifest: &IconManifest) -> ResolvedEntry {
         iconify_id,
         declared_in_file: manifest.display_path(entry.file()),
         declared_in_file_path: entry.file().to_string_lossy().into_owned(),
+        declared_in_span_start: span.start as u32,
+        declared_in_span_end: span.end as u32,
     }
 }
 
@@ -177,6 +188,28 @@ pub fn resolve_family_variant(
     ResolveOutcome::Found(describe_entry(entry, &manifest))
 }
 
+/// The entry (if any) whose table `offset` - a UTF-8 byte offset into
+/// `toml_file_path`'s own text, same convention as [`macro_call_at`]'s -
+/// falls inside, for syncing an IDE's manifest browser to wherever the
+/// caret is sitting inside an `icons.gui.toml` (or one of its `[link]`d
+/// files) itself - the reverse of syncing it from an `icon!(...)` call in
+/// a `.rs` file. `manifest_path` is always the *root* manifest (loading
+/// pulls in every `[link]`d file's entries too); `toml_file_path` is
+/// whichever specific file the caret is actually in right now - almost
+/// always the same file, but not when the caret's in a `[link]`d file
+/// included by a different root.
+#[uniffi::export]
+pub fn entry_at_offset(manifest_path: String, toml_file_path: String, offset: u32) -> Option<ResolvedEntry> {
+    let (manifest, errors) = guicons_core::load_icon_manifest(Path::new(&manifest_path));
+    if !errors.is_empty() {
+        return None;
+    }
+    let file = guicons_core::canonicalize_or_self(Path::new(&toml_file_path));
+    let offset = offset as usize;
+    let entry = manifest.entries().iter().find(|entry| entry.file() == file && entry.span().contains(&offset))?;
+    Some(describe_entry(entry, &manifest))
+}
+
 #[derive(uniffi::Enum)]
 pub enum ListManifestEntriesOutcome {
     Found { entries: Vec<ResolvedEntry> },
@@ -196,6 +229,32 @@ pub fn list_manifest_entries(manifest_path: String) -> ListManifestEntriesOutcom
 
     let entries = manifest.entries().iter().map(|entry| describe_entry(entry, &manifest)).collect();
     ListManifestEntriesOutcome::Found { entries }
+}
+
+/// guicons' own built-in provider schemas (Fluent, Phosphor, Material
+/// Symbols, Heroicons, Bootstrap Icons, Tabler, ...) - each one *is* an
+/// iconify.design prefix, so this doubles as a sensible, curated default
+/// list for an Iconify-browsing UI's provider picker, without needing a
+/// network round-trip to iconify.design's own (much larger, unfiltered)
+/// collection list.
+#[uniffi::export]
+pub fn builtin_provider_names() -> Vec<String> {
+    guicons_core::builtin_provider_names().map(str::to_string).collect()
+}
+
+/// The exact Slint component name `guicons-build` generates for a
+/// manifest entry's `key` (`docker-filled` -> `DockerFilledIcon`) - same
+/// `rust_variant_name` + `"Icon"` suffix `guicons-build/src/generate/
+/// slint.rs::slint_component_name` builds, called through rather than
+/// duplicated so a caller predicting this name (an icon browser UI
+/// offering an `IconName {}` Slint snippet to copy, say) can't drift from
+/// what codegen actually emits. Only meaningful for an entry that's
+/// actually in the manifest and will get materialized/generated - not
+/// for an arbitrary iconify.design id nothing's added yet, which has no
+/// corresponding Slint component on disk at all.
+#[uniffi::export]
+pub fn slint_component_name(key: String) -> String {
+    format!("{}Icon", guicons_core::rust_variant_name(&key))
 }
 
 /// Every `icons.gui.toml` anywhere under `workspace_root` - a directory

@@ -49,6 +49,27 @@ pub(crate) fn collect_entries(
     diags: &mut Diagnostics,
     acc: &mut Vec<IconEntry>,
 ) {
+    // A flat `[fluent]` family at the manifest's top level and a provider
+    // schema override (`[providers.fluent]`) collide on name but not on
+    // shape - a schema's `variants = [...]` is a plain string array,
+    // while an icon family's `variants` table (just below) is inline
+    // tables keyed by variant name. Getting this wrong used to surface as
+    // a confusing "`variants` in `fluent` must be a table" parse error
+    // (true, but not the actual mistake) - almost certainly the user
+    // meant the provider-schema section and just wrote the wrong path,
+    // not that they want an icon family named identically to a real
+    // iconify provider. Only checked at the top level (`path.len() == 1`)
+    // - `[settings.fluent]` naming a *variant* "fluent" is unambiguous
+    // and unrelated to this collision.
+    if path.len() == 1 && crate::iconify_providers::is_known_iconify_provider_prefix(&path[0]) {
+        let name = &path[0];
+        diags.error(
+            Some(table_span(&table).into()),
+            format!("`[{name}]` is a reserved iconify provider name - did you mean `[providers.{name}]`?"),
+        );
+        return;
+    }
+
     if let Some(mut variants_value) = table.remove("variants") {
         let key_prefix = path.join("-");
         let (family, explicit_size) = split_family_and_size(&path);
@@ -133,9 +154,23 @@ pub(crate) fn collect_entries(
     }
 }
 
+/// Folds over *keys* as well as values - a table this covers only by its
+/// values' spans (the original bug: `IconEntry::span()` exists precisely
+/// so editor tooling can map a cursor position back to an entry, but a
+/// single-key flat entry like `[family]\nfile = "x.svg"` produced a span
+/// covering only the `"x.svg"` string literal, not the `file` key text
+/// right next to it - the single most natural place to actually click).
+/// An inline `variants.name = { ... }` table never had this problem since
+/// its *value* span (an inline table's own `{ ... }` span) already
+/// includes every key inside it - only a real, non-inline table (this
+/// function's actual input) needed the fix. Still doesn't reach back to
+/// cover the `[section]`/`[section.sub]` header line itself, since by the
+/// time this runs the table's own wrapping `Value` (which carried that)
+/// has already been unwrapped by the caller - a real gap, just a smaller
+/// and much less commonly clicked one than the key/value bug this fixes.
 fn table_span(table: &Table<'_>) -> Span {
-    table.values().fold(Span::new(usize::MAX, 0), |acc, value| {
-        Span::new(acc.start.min(value.span.start), acc.end.max(value.span.end))
+    table.iter().fold(Span::new(usize::MAX, 0), |acc, (key, value)| {
+        Span::new(acc.start.min(key.span.start), acc.end.max(value.span.end))
     })
 }
 

@@ -2,6 +2,35 @@ pub fn rust_const_name(key: &str) -> String {
     key.replace(['.', '-'], "_").to_ascii_uppercase()
 }
 
+/// A manifest key (`settings-filled`) as a Rust/Slint `UpperCamelCase`
+/// type-name fragment - used for both `guicons-build`'s generated Rust
+/// builder struct names and its generated Slint component names (e.g.
+/// `SettingsFilledIcon`), so it lives here rather than in either codegen
+/// module - anything that needs to predict a name codegen will produce
+/// (an IDE feature suggesting `icon!`-adjacent Slint syntax, say) can
+/// call the exact same function instead of keeping its own copy in sync
+/// by hand.
+pub fn rust_variant_name(key: &str) -> String {
+    let mut result = String::new();
+    for segment in key.split(['.', '-', '_']) {
+        if segment.is_empty() {
+            continue;
+        }
+        let mut chars = segment.chars();
+        if let Some(first) = chars.next() {
+            result.push(first.to_ascii_uppercase());
+            result.push_str(chars.as_str());
+        }
+    }
+    if result.is_empty() {
+        "Unknown".to_string()
+    } else if result.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        format!("Icon{result}")
+    } else {
+        result
+    }
+}
+
 /// Converts a manifest name (a family or variant) into a Rust `snake_case`
 /// fn/method name, guarding against the two ways an otherwise valid segment
 /// can fail to be a valid identifier: starting with a digit (`20` ->

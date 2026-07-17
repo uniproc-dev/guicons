@@ -1,6 +1,6 @@
-use super::shared::{rust_variant_name, write_if_changed};
+use super::shared::write_if_changed;
 use crate::materialize::{ImageKind, MaterializedIcon, MaterializedIconBackend};
-use guicons_core::{rust_const_name, rust_fn_name};
+use guicons_core::{rust_const_name, rust_fn_name, rust_variant_name};
 use std::collections::BTreeMap;
 use std::path::Path;
 

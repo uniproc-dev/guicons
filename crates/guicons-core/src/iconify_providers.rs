@@ -1,0 +1,286 @@
+//! Every collection prefix iconify.design currently publishes
+//! (`api.iconify.design/collections`, 230 entries as of writing) - not
+//! just guicons' own curated, schema-having [`crate::builtin_provider_names`]
+//! subset. Used to reserve these names at the manifest's top level: a
+//! flat `[fluent]` family (as opposed to `[providers.fluent]`) almost
+//! certainly means the user meant to write a provider schema override and
+//! got the section path wrong, not that they genuinely want an icon
+//! family named identically to a real iconify provider - the two shapes
+//! collide syntactically (a provider schema's `variants = [...]` is a
+//! plain string array, while an icon family's `variants` table is inline
+//! tables keyed by variant name), which previously surfaced as a
+//! confusing "`variants` in `fluent` must be a table" parse error instead
+//! of a diagnostic that actually explains what happened.
+//!
+//! `#[doc(hidden)]` rather than a polished public API - this list is
+//! generated from iconify's own metadata, not something guicons commits
+//! to maintaining/updating on its own schedule, but callers (the IDE
+//! plugin's own diagnostics, say) still need to reach it.
+
+#[doc(hidden)]
+pub fn known_iconify_provider_prefixes() -> impl Iterator<Item = &'static str> {
+    PREFIXES.iter().copied()
+}
+
+#[doc(hidden)]
+pub fn is_known_iconify_provider_prefix(name: &str) -> bool {
+    PREFIXES.binary_search(&name).is_ok()
+}
+
+// Sorted - `is_known_iconify_provider_prefix` binary-searches it.
+const PREFIXES: &[&str] = &[
+    "academicons",
+    "akar-icons",
+    "ant-design",
+    "arcticons",
+    "at-icons",
+    "basil",
+    "bi",
+    "bitcoin-icons",
+    "boxicons",
+    "bpmn",
+    "brandico",
+    "bx",
+    "bxl",
+    "bxs",
+    "bytesize",
+    "carbon",
+    "catppuccin",
+    "cbi",
+    "charm",
+    "ci",
+    "cib",
+    "cif",
+    "cil",
+    "circle-flags",
+    "circum",
+    "clarity",
+    "codex",
+    "codicon",
+    "covid",
+    "cryptocurrency",
+    "cryptocurrency-color",
+    "cuida",
+    "dashicons",
+    "devicon",
+    "devicon-plain",
+    "dinkie-icons",
+    "duo-icons",
+    "ei",
+    "el",
+    "emojione",
+    "emojione-monotone",
+    "emojione-v1",
+    "entypo",
+    "entypo-social",
+    "eos-icons",
+    "ep",
+    "et",
+    "eva",
+    "f7",
+    "fa",
+    "fa-brands",
+    "fa-regular",
+    "fa-solid",
+    "fa6-brands",
+    "fa6-regular",
+    "fa6-solid",
+    "fa7-brands",
+    "fa7-regular",
+    "fa7-solid",
+    "fad",
+    "famicons",
+    "fe",
+    "feather",
+    "file-icons",
+    "flag",
+    "flagpack",
+    "flat-color-icons",
+    "flat-ui",
+    "flowbite",
+    "fluent",
+    "fluent-color",
+    "fluent-emoji",
+    "fluent-emoji-flat",
+    "fluent-emoji-high-contrast",
+    "fluent-mdl2",
+    "fontelico",
+    "fontisto",
+    "formkit",
+    "foundation",
+    "fxemoji",
+    "gala",
+    "game-icons",
+    "garden",
+    "gcp",
+    "geo",
+    "gg",
+    "ginetex",
+    "gis",
+    "glyphs",
+    "glyphs-poly",
+    "gravity-ui",
+    "gridicons",
+    "grommet-icons",
+    "guidance",
+    "healthicons",
+    "heroicons",
+    "heroicons-outline",
+    "heroicons-solid",
+    "hugeicons",
+    "humbleicons",
+    "ic",
+    "icomoon-free",
+    "icon-park",
+    "icon-park-outline",
+    "icon-park-solid",
+    "icon-park-twotone",
+    "iconamoon",
+    "iconoir",
+    "icons8",
+    "il",
+    "ion",
+    "iwwa",
+    "ix",
+    "jam",
+    "la",
+    "lets-icons",
+    "line-md",
+    "lineicons",
+    "logos",
+    "ls",
+    "lsicon",
+    "lucide",
+    "lucide-lab",
+    "mage",
+    "majesticons",
+    "maki",
+    "map",
+    "marketeq",
+    "material-icon-theme",
+    "material-symbols",
+    "material-symbols-light",
+    "mdi",
+    "mdi-light",
+    "medical-icon",
+    "memory",
+    "meteocons",
+    "meteor-icons",
+    "mi",
+    "mingcute",
+    "mono-icons",
+    "mynaui",
+    "nimbus",
+    "nonicons",
+    "noto",
+    "noto-v1",
+    "nrk",
+    "octicon",
+    "oi",
+    "ooui",
+    "openmoji",
+    "osmic",
+    "oui",
+    "pajamas",
+    "pepicons",
+    "pepicons-pencil",
+    "pepicons-pop",
+    "pepicons-print",
+    "ph",
+    "picon",
+    "pinhead",
+    "pixel",
+    "pixelarticons",
+    "prime",
+    "proicons",
+    "ps",
+    "qlementine-icons",
+    "quill",
+    "radix-icons",
+    "raphael",
+    "ri",
+    "rivet-icons",
+    "roentgen",
+    "selfhst",
+    "si",
+    "si-glyph",
+    "sidekickicons",
+    "simple-icons",
+    "simple-line-icons",
+    "skill-icons",
+    "solar",
+    "stash",
+    "streamline",
+    "streamline-block",
+    "streamline-color",
+    "streamline-cyber",
+    "streamline-cyber-color",
+    "streamline-emojis",
+    "streamline-flex",
+    "streamline-flex-color",
+    "streamline-freehand",
+    "streamline-freehand-color",
+    "streamline-kameleon-color",
+    "streamline-logos",
+    "streamline-pixel",
+    "streamline-plump",
+    "streamline-plump-color",
+    "streamline-sharp",
+    "streamline-sharp-color",
+    "streamline-stickies-color",
+    "streamline-ultimate",
+    "streamline-ultimate-color",
+    "subway",
+    "svg-spinners",
+    "system-uicons",
+    "tabler",
+    "tdesign",
+    "teenyicons",
+    "temaki",
+    "token",
+    "token-branded",
+    "topcoat",
+    "twemoji",
+    "typcn",
+    "uil",
+    "uim",
+    "uis",
+    "uit",
+    "uiw",
+    "unjs",
+    "vaadin",
+    "vs",
+    "vscode-icons",
+    "websymbol",
+    "weui",
+    "whh",
+    "wi",
+    "wordpress",
+    "wpf",
+    "zmdi",
+    "zondicons",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefixes_are_sorted_for_binary_search() {
+        let mut sorted = PREFIXES.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(PREFIXES, sorted.as_slice());
+    }
+
+    #[test]
+    fn recognizes_a_known_prefix() {
+        assert!(is_known_iconify_provider_prefix("fluent"));
+        assert!(is_known_iconify_provider_prefix("mdi"));
+    }
+
+    #[test]
+    fn rejects_an_unknown_name() {
+        assert!(!is_known_iconify_provider_prefix("docker"));
+        assert!(!is_known_iconify_provider_prefix("settings"));
+    }
+}

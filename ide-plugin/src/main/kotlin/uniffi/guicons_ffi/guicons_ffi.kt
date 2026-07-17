@@ -738,6 +738,12 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -753,12 +759,16 @@ internal interface UniffiLib : Library {
         
     }
 
+    fun uniffi_guicons_ffi_fn_func_builtin_provider_names(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_cached_iconify_collection_names(`workspaceRoot`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,
     ): Long
     fun uniffi_guicons_ffi_fn_func_download_iconify_collection(`workspaceRoot`: RustBuffer.ByValue,`provider`: RustBuffer.ByValue,
     ): Long
     fun uniffi_guicons_ffi_fn_func_ensure_iconify_icon_cached(`workspaceRoot`: RustBuffer.ByValue,`id`: RustBuffer.ByValue,
     ): Long
+    fun uniffi_guicons_ffi_fn_func_entry_at_offset(`manifestPath`: RustBuffer.ByValue,`tomlFilePath`: RustBuffer.ByValue,`offset`: Int,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_find_manifest_for_rust_file(`rustFilePath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_list_manifest_entries(`manifestPath`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -773,6 +783,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_guicons_ffi_fn_func_search_iconify_icons(`query`: RustBuffer.ByValue,`limit`: Int,
     ): Long
+    fun uniffi_guicons_ffi_fn_func_slint_component_name(`key`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun ffi_guicons_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_guicons_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -885,11 +897,15 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_guicons_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_guicons_ffi_checksum_func_builtin_provider_names(
+    ): Short
     fun uniffi_guicons_ffi_checksum_func_cached_iconify_collection_names(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_download_iconify_collection(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_ensure_iconify_icon_cached(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_entry_at_offset(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file(
     ): Short
@@ -904,6 +920,8 @@ internal interface UniffiLib : Library {
     fun uniffi_guicons_ffi_checksum_func_resolve_family_variant(
     ): Short
     fun uniffi_guicons_ffi_checksum_func_search_iconify_icons(
+    ): Short
+    fun uniffi_guicons_ffi_checksum_func_slint_component_name(
     ): Short
     fun ffi_guicons_ffi_uniffi_contract_version(
     ): Int
@@ -922,6 +940,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_guicons_ffi_checksum_func_builtin_provider_names() != 45276.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_guicons_ffi_checksum_func_cached_iconify_collection_names() != 50944.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -929,6 +950,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_ensure_iconify_icon_cached() != 58278.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_entry_at_offset() != 15084.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_find_manifest_for_rust_file() != 17306.toShort()) {
@@ -950,6 +974,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_guicons_ffi_checksum_func_search_iconify_icons() != 61508.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_guicons_ffi_checksum_func_slint_component_name() != 42026.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1252,7 +1279,17 @@ data class ResolvedEntry (
      * caller that wants to actually open it (e.g. a "declared in" link),
      * not just show it.
      */
-    var `declaredInFilePath`: kotlin.String
+    var `declaredInFilePath`: kotlin.String, 
+    /**
+     * UTF-8 byte offsets of this entry's own table within
+     * `declared_in_file_path` (`IconEntry::span()`) - not just "which
+     * file", but exactly where in it, for a caller that wants to
+     * navigate straight to/highlight this entry in an already-open
+     * editor on that file, the same offset convention
+     * [`macro_call_at`]/[`entry_at_offset`] already use.
+     */
+    var `declaredInSpanStart`: kotlin.UInt, 
+    var `declaredInSpanEnd`: kotlin.UInt
 ) {
     
     companion object
@@ -1273,6 +1310,8 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
         )
     }
 
@@ -1285,7 +1324,9 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.allocationSize(value.`sourceFile`) +
             FfiConverterOptionalString.allocationSize(value.`iconifyId`) +
             FfiConverterString.allocationSize(value.`declaredInFile`) +
-            FfiConverterString.allocationSize(value.`declaredInFilePath`)
+            FfiConverterString.allocationSize(value.`declaredInFilePath`) +
+            FfiConverterUInt.allocationSize(value.`declaredInSpanStart`) +
+            FfiConverterUInt.allocationSize(value.`declaredInSpanEnd`)
     )
 
     override fun write(value: ResolvedEntry, buf: ByteBuffer) {
@@ -1298,6 +1339,8 @@ public object FfiConverterTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntr
             FfiConverterOptionalString.write(value.`iconifyId`, buf)
             FfiConverterString.write(value.`declaredInFile`, buf)
             FfiConverterString.write(value.`declaredInFilePath`, buf)
+            FfiConverterUInt.write(value.`declaredInSpanStart`, buf)
+            FfiConverterUInt.write(value.`declaredInSpanEnd`, buf)
     }
 }
 
@@ -1672,6 +1715,38 @@ public object FfiConverterOptionalTypeMacroCallSite: FfiConverterRustBuffer<Macr
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeResolvedEntry: FfiConverterRustBuffer<ResolvedEntry?> {
+    override fun read(buf: ByteBuffer): ResolvedEntry? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeResolvedEntry.read(buf)
+    }
+
+    override fun allocationSize(value: ResolvedEntry?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeResolvedEntry.allocationSize(value)
+        }
+    }
+
+    override fun write(value: ResolvedEntry?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeResolvedEntry.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalTypeIconSelector: FfiConverterRustBuffer<IconSelector?> {
     override fun read(buf: ByteBuffer): IconSelector? {
         if (buf.get().toInt() == 0) {
@@ -1762,6 +1837,23 @@ public object FfiConverterSequenceTypeResolvedEntry: FfiConverterRustBuffer<List
 
 
         /**
+         * guicons' own built-in provider schemas (Fluent, Phosphor, Material
+         * Symbols, Heroicons, Bootstrap Icons, Tabler, ...) - each one *is* an
+         * iconify.design prefix, so this doubles as a sensible, curated default
+         * list for an Iconify-browsing UI's provider picker, without needing a
+         * network round-trip to iconify.design's own (much larger, unfiltered)
+         * collection list.
+         */ fun `builtinProviderNames`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_builtin_provider_names(
+        _status)
+}
+    )
+    }
+    
+
+        /**
          * Icon names already cached on disk for `provider` - empty if its
          * collection hasn't been fetched yet (see [`download_iconify_collection`]).
          */
@@ -1816,6 +1908,27 @@ public object FfiConverterSequenceTypeResolvedEntry: FfiConverterRustBuffer<List
         UniffiNullRustCallStatusErrorHandler,
     )
     }
+
+        /**
+         * The entry (if any) whose table `offset` - a UTF-8 byte offset into
+         * `toml_file_path`'s own text, same convention as [`macro_call_at`]'s -
+         * falls inside, for syncing an IDE's manifest browser to wherever the
+         * caret is sitting inside an `icons.gui.toml` (or one of its `[link]`d
+         * files) itself - the reverse of syncing it from an `icon!(...)` call in
+         * a `.rs` file. `manifest_path` is always the *root* manifest (loading
+         * pulls in every `[link]`d file's entries too); `toml_file_path` is
+         * whichever specific file the caret is actually in right now - almost
+         * always the same file, but not when the caret's in a `[link]`d file
+         * included by a different root.
+         */ fun `entryAtOffset`(`manifestPath`: kotlin.String, `tomlFilePath`: kotlin.String, `offset`: kotlin.UInt): ResolvedEntry? {
+            return FfiConverterOptionalTypeResolvedEntry.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_entry_at_offset(
+        FfiConverterString.lower(`manifestPath`),FfiConverterString.lower(`tomlFilePath`),FfiConverterUInt.lower(`offset`),_status)
+}
+    )
+    }
+    
 
         /**
          * See `guicons_core::manifest_path_for_rust_file` - this is a thin
@@ -1927,5 +2040,26 @@ public object FfiConverterSequenceTypeResolvedEntry: FfiConverterRustBuffer<List
         UniffiNullRustCallStatusErrorHandler,
     )
     }
+
+        /**
+         * The exact Slint component name `guicons-build` generates for a
+         * manifest entry's `key` (`docker-filled` -> `DockerFilledIcon`) - same
+         * `rust_variant_name` + `"Icon"` suffix `guicons-build/src/generate/
+         * slint.rs::slint_component_name` builds, called through rather than
+         * duplicated so a caller predicting this name (an icon browser UI
+         * offering an `IconName {}` Slint snippet to copy, say) can't drift from
+         * what codegen actually emits. Only meaningful for an entry that's
+         * actually in the manifest and will get materialized/generated - not
+         * for an arbitrary iconify.design id nothing's added yet, which has no
+         * corresponding Slint component on disk at all.
+         */ fun `slintComponentName`(`key`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_guicons_ffi_fn_func_slint_component_name(
+        FfiConverterString.lower(`key`),_status)
+}
+    )
+    }
+    
 
 
