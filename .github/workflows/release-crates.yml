@@ -1,21 +1,23 @@
 name: Publish crates.io
 
-# Manual only, never on a push/tag - `cargo publish` is irreversible (a
-# version can be yanked but never deleted or overwritten), so this only
-# ever runs when a human explicitly clicks "Run workflow" in the Actions
-# tab and confirms the version. Requires a `CARGO_REGISTRY_TOKEN` repo
-# secret (an API token from https://crates.io/settings/tokens) before it
-# can do anything.
+# Runs on every push to master that touches a Cargo.toml - each publish
+# step below is idempotent (checks crates.io first and skips if that
+# exact version is already live), so a push that *doesn't* bump the
+# shared workspace version just no-ops through every step instead of
+# erroring. Bumping `[workspace.package] version` in the root Cargo.toml
+# and pushing is what actually triggers a real release. `workflow_dispatch`
+# is kept as a manual escape hatch (e.g. retrying after a transient
+# failure) - same idempotency guard applies either way.
 on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+      - "crates/*/Cargo.toml"
   workflow_dispatch:
-    inputs:
-      confirm:
-        description: 'Type "publish" to confirm - this is irreversible'
-        required: true
 
 jobs:
   publish:
-    if: github.event.inputs.confirm == 'publish'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,31 +30,24 @@ jobs:
       # once every path-dependency it names a `version` for (see each
       # crate's Cargo.toml) is actually live on crates.io - a freshly
       # published crate needs a few seconds to show up in the index, hence
-      # the wait between steps rather than firing them back to back.
+      # the wait after an actual publish (not after a skip - nothing
+      # changed on the index, no reason to wait).
       - name: Publish guicons-core
-        run: cargo publish -p guicons-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - run: sleep 30
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons-core
 
       - name: Publish guicons-net
-        run: cargo publish -p guicons-net --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - run: sleep 30
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons-net
 
       - name: Publish guicons-macros
-        run: cargo publish -p guicons-macros --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - run: sleep 30
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons-macros
 
       - name: Publish guicons-build
-        run: cargo publish -p guicons-build --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - run: sleep 30
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons-build
 
       - name: Publish guicons
-        run: cargo publish -p guicons --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - run: sleep 30
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons
 
       - name: Publish guicons-cli
-        run: cargo publish -p guicons-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: bash .github/workflows/scripts/publish-if-new.sh guicons-cli
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

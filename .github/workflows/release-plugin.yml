@@ -1,20 +1,20 @@
 name: Release IDE plugin
 
-# Building+signing the zip runs automatically on a `plugin-v*` tag (so
-# every tagged release always has a downloadable artifact attached to its
-# GitHub Release, even before Marketplace review finishes) - but the
-# actual `publishPlugin` step to JetBrains Marketplace is manual-approval
-# gated via a GitHub Environment ("jetbrains-marketplace"), since that
-# push is effectively irreversible (a version can't be un-published, only
-# superseded). Configure that environment's required reviewers in this
-# repo's Settings > Environments before relying on the gate.
+# Runs on every push to master that touches build.gradle.kts (where the
+# plugin's own `version` lives) - publishing is idempotent (checks the
+# Marketplace's update feed first and skips if that version's already
+# there), so a push that doesn't bump `version` just no-ops instead of
+# erroring. Bumping it and pushing is what actually ships a release.
+# `workflow_dispatch` is a manual escape hatch with the same guard.
 on:
   push:
-    tags: ["plugin-v*"]
+    branches: [master]
+    paths:
+      - "ide-plugin/build.gradle.kts"
   workflow_dispatch:
 
 jobs:
-  build:
+  release:
     runs-on: windows-latest
     env:
       GUICONS_CI: "true"
@@ -34,11 +34,36 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Read plugin version
+        id: plugin_version
+        shell: bash
+        working-directory: ide-plugin
+        run: echo "version=$(./gradlew properties -q | grep '^version:' | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version is already published
+        id: check
+        shell: bash
+        env:
+          VERSION: ${{ steps.plugin_version.outputs.version }}
+        run: |
+          feed=$(curl -s "https://plugins.jetbrains.com/plugins/list?pluginId=dev.guicons.idea-plugin")
+          if echo "$feed" | grep -q "version=\"$VERSION\""; then
+            echo "$VERSION is already on the Marketplace - skipping"
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Verify plugin project configuration
+        if: steps.check.outputs.already_published == 'false'
         working-directory: ide-plugin
         run: ./gradlew verifyPluginProjectConfiguration --console=plain
 
+      # Skipped entirely (not failed) when CERTIFICATE_CHAIN/PRIVATE_KEY
+      # aren't set as repo secrets - self-signing is optional, JetBrains
+      # signs the plugin itself on publish if you don't.
       - name: Sign plugin
+        if: steps.check.outputs.already_published == 'false'
         working-directory: ide-plugin
         env:
           CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
@@ -46,42 +71,14 @@ jobs:
           PRIVATE_KEY_PASSWORD: ${{ secrets.PRIVATE_KEY_PASSWORD }}
         run: ./gradlew signPlugin --console=plain
 
-      - uses: actions/upload-artifact@v4
+      - if: steps.check.outputs.already_published == 'false'
+        uses: actions/upload-artifact@v4
         with:
           name: guicons-plugin
           path: ide-plugin/build/distributions/*.zip
 
-      - if: startsWith(github.ref, 'refs/tags/plugin-v')
-        name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ide-plugin/build/distributions/*.zip
-
-  publish:
-    needs: build
-    runs-on: windows-latest
-    # Requires manual approval through the "jetbrains-marketplace" GitHub
-    # Environment - nothing publishes until a human clicks approve there.
-    environment: jetbrains-marketplace
-    env:
-      GUICONS_CI: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - uses: gradle/actions/setup-gradle@v4
-
       - name: Publish to JetBrains Marketplace
+        if: steps.check.outputs.already_published == 'false'
         working-directory: ide-plugin
         env:
           CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
