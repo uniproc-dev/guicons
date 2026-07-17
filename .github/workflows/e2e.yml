@@ -1,0 +1,60 @@
+name: E2E (fixture builds)
+
+# The fixture tests in crates/guicons-build/tests/fixture_crates.rs are
+# marked #[ignore] specifically so the fast, always-on `ci.yml` job skips
+# them - each one spawns a whole separate `cargo test` from scratch
+# against a fixture crate, several minutes rather than the usual
+# sub-second unit test. Running that on every single push (including a
+# patch-only version bump) would make CI slow for no real benefit, so
+# this only fires when the workspace's *minor* version changes
+# (`0.Y.Z` -> a different `Y`) - the pre-1.0 convention where a minor
+# bump is the "this might actually break something" release, unlike a
+# patch bump.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "Cargo.toml"
+  workflow_dispatch:
+
+jobs:
+  check-version-bump:
+    runs-on: ubuntu-latest
+    outputs:
+      minor_bumped: ${{ steps.check.outputs.minor_bumped }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: check
+        shell: bash
+        run: |
+          new_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          new_minor=$(echo "$new_version" | cut -d. -f2)
+
+          old_version=$(git show "${{ github.event.before }}:Cargo.toml" 2>/dev/null | grep -m1 '^version' | cut -d'"' -f2 || true)
+          old_minor=$(echo "${old_version:-}" | cut -d. -f2)
+
+          echo "old version: ${old_version:-<none>}, new version: $new_version"
+          if [ "$new_minor" != "$old_minor" ]; then
+            echo "minor version changed ($old_minor -> $new_minor) - running e2e"
+            echo "minor_bumped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "minor version unchanged - skipping e2e"
+            echo "minor_bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  e2e:
+    needs: check-version-bump
+    if: needs.check-version-bump.outputs.minor_bumped == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run fixture e2e tests
+        run: cargo test -p guicons-build --test fixture_crates -- --ignored

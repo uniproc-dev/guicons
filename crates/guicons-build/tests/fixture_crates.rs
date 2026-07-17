@@ -1,7 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Spawns a whole separate `cargo test` subprocess against the fixture
+// crate with a fresh, uncached target dir - a full from-scratch compile
+// every run, several minutes rather than the usual sub-second unit test.
+// Excluded from the normal `cargo test --workspace` CI job for exactly
+// that reason; run explicitly via `.github/workflows/e2e.yml`, gated to
+// pushes that bump the workspace's minor version (`0.Y.0`-style).
 #[test]
+#[ignore = "slow: full nested cargo build from scratch - see module doc comment"]
 fn basic_file_variants_fixture_builds() {
     run_fixture("basic-file-variants");
 }
