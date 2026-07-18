@@ -18,36 +18,24 @@ icon actually exists in the set. guicons gives you that single source of
 truth, with codegen and a macro on top so referencing an icon is a
 typed, checked operation instead of a bare file path.
 
-See [Alternatives](#alternatives) for how this compares to icon-font
-crates and the `iconify` crate.
-
 ## Features
 
 - **One manifest, `icons.gui.toml`**: family/variant/size axes,
-  `[link] includes = [...]` to split across files, `[defaults]` for shared root/
-  provider/size, `[providers.<name>]` schemas (built-in for Fluent,
-  Phosphor, Material Symbols, Heroicons, Bootstrap Icons, Tabler, Ionicons,
-  Octicons, MingCute, Teenyicons, Eva Icons, and Solar, with per-field
-  `.override`).
+  `[link] includes = [...]` to split across files, `[providers.<name>]`
+  schemas (10+ built-in providers, with per-field `.override`).
 - **Any source, mixed freely**: local file, URL, iconify.design id
-  (auto-fetched and cached offline), or a font glyph
-  (`font-family:codepoint`).
+  (auto-fetched and cached offline), or a font glyph.
 - **Typed build-time codegen** (`guicons-build`): a Rust registry with
   per-family/size builder methods, and a matching Slint `Icon`
-  component - no cartesian product of nonexistent combinations.
+  component.
 - **`guicons::icon!`**: resolves a selector against your manifest at
   compile time straight into your active GUI framework's native type
-  (`slint::Image`, an iced `Handle`) - no `image_from_data` wrapping at
-  the call site. `icon_key!` resolves to the manifest's `IconKey`
-  constant instead; `icon_data!` always resolves to the plain,
-  framework-agnostic `IconData`.
+  (`slint::Image`, an iced `Handle`).
 - **Slint integration out of the box**, with a runnable example in
   `crates/guicons/examples/`.
-- **`icons` CLI** (`guicons-cli`): `icons fetch`/`update` populates the
+- **CLI** (`guicons-cli`): `icons fetch`/`update` populates the
   offline iconify cache; `icons add <iconify-id|file>` adds an icon to
-  your manifest in one command - paste an id like
-  `fluent:settings-24-regular` and it figures out the right
-  family/size/variant for you, no hand-editing TOML.
+  your manifest in one command.
 - **LSP** (`guicons-lsp`): completion, hover, goto-definition, find
   usages, rename, and diagnostics, with navigation between `icons.gui.toml`
   and your Rust code in both directions.
@@ -56,34 +44,18 @@ crates and the `iconify` crate.
   browser to search, preview, and insert a reference at the caret in one
   click.
 
-## Alternatives
-
-- **Icon-font crates** (`iced_fontello`, `egui_material_icons`,
-  `iconflow`, `free-icons`, `icondata`): bundle someone else's whole
-  public icon pack (as a font or SVG data), not a curated set from your
-  own mix of sources. Good fit if you just want "give me Bootstrap
-  Icons"; not if you have your own custom icons plus a few from a
-  provider.
-- **[`iconify`](https://docs.rs/iconify)**: closest to guicons'
-  iconify-fetch piece alone - compile-time download, cache, and embed of
-  a single id via `iconify::svg!("mdi:home")`. No manifest, no family/
-  variant/size model, no local-file/URL/glyph sources, and it hands back
-  a raw SVG string rather than converting to your GUI framework's native
-  image type.
-- **Hand-rolled `include_bytes!`**: what most apps actually do, and a
-  file-path typo is already a compile error either way. What it doesn't
-  give you: one manifest listing every icon your app uses instead of
-  paths scattered across the codebase, iconify/URL fetching with an
-  offline cache (`include_bytes!` can only embed a file you already have
-  on disk), or generated per-family/variant/size builder methods instead
-  of hand-writing a constant per icon.
-
 ## Usage
 
 ```toml
 # icons.gui.toml
 [defaults]
-root = "assets/icons"
+root = "assets"
+
+[providers.phosphor]
+variants = ["thin", "light", "bold", "fill", "duotone"]
+
+[link]
+includes = ["icons/toolbar.gui.toml"]
 
 [settings]
 variants.filled = { file = "settings-filled.svg" }
@@ -91,6 +63,22 @@ variants.regular = { file = "settings-regular.svg" }
 
 [docker]
 file = "docker.svg"
+
+[home]
+iconify = "mdi:home"
+
+[spinner]
+glyph = "MyIconFont:U+E001"
+```
+
+```toml
+# icons/toolbar.gui.toml - split out via [link], same [defaults] root
+[toolbar.16]
+variants.filled = { file = "toolbar-16-filled.svg" }
+
+[toolbar.24]
+variants.filled = { file = "toolbar-24-filled.svg" }
+variants.regular = { file = "toolbar-24-regular.svg" }
 ```
 
 ```rust
