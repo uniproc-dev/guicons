@@ -14,8 +14,8 @@ slint = []
 iced = []
 
 [dependencies]
-guicons-core = { path = "../guicons-core", version = "0.1.0" }
-guicons-net = { path = "../guicons-net", version = "0.1.0" }
+guicons-core = { path = "../guicons-core", version = "0.2.0" }
+guicons-net = { path = "../guicons-net", version = "0.2.0" }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["parsing", "proc-macro"] }

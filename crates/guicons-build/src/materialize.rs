@@ -1,4 +1,4 @@
-use super::paths::{canonicalize_existing, current_dir};
+use super::paths::canonicalize_existing;
 use guicons_core::{IconEntrySource, IconManifest};
 use guicons_net::{ensure_cached, iconify_cache_path, iconify_url, url_cache_path};
 use std::fs;
@@ -26,6 +26,15 @@ pub(crate) enum ImageKind {
     Png,
 }
 
+/// Iconify/URL cache paths are rooted at `manifest.workspace_root()`, not
+/// the build script's own `current_dir()` - those two only coincide when
+/// `IconBuild::auto()`'s discovery finds `icons.gui.toml` sitting directly
+/// alongside the calling crate. `IconBuild::new(path)` lets a manifest live
+/// anywhere else (a monorepo root two crates up, say), and `current_dir()`
+/// is always the compiling crate's own directory regardless - using it here
+/// scattered a separate `.cache/guicons` per crate, invisible to `guicons
+/// fetch`/the LSP diagnostics that already resolve the cache dir from the
+/// manifest's real location the correct way.
 pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -> Vec<MaterializedIcon> {
     let icons_dir = build_out_dir.join("icons");
     let _ = fs::create_dir_all(&icons_dir);
@@ -46,7 +55,7 @@ pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -
                 }
                 IconEntrySource::Iconify(id) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
-                    let cached = iconify_cache_path(&current_dir(), id);
+                    let cached = iconify_cache_path(manifest.workspace_root(), id);
                     ensure_cached(&cached, &iconify_url(id));
                     copy_if_changed(&cached, &output_path);
                     MaterializedIconBackend::Image {
@@ -56,7 +65,7 @@ pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -
                 }
                 IconEntrySource::Url(url) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
-                    let cached = url_cache_path(&current_dir(), url);
+                    let cached = url_cache_path(manifest.workspace_root(), url);
                     ensure_cached(&cached, url);
                     copy_if_changed(&cached, &output_path);
                     MaterializedIconBackend::Image {

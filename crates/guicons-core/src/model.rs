@@ -135,6 +135,12 @@ impl IconEntry {
         self.dynamic
     }
 
+    // TODO: app-icon bundling (.ico/.icns generation, of which this is the
+    // last remaining piece) was dropped from guicons's own scope - it's a
+    // packaging/distribution concern, not "icons looked up at runtime by
+    // an app's own UI". This field/accessor doesn't belong on the main
+    // IconEntry model; move it out to a separate crate (or drop it) rather
+    // than growing more usages of it here.
     pub fn windows_ico(&self) -> Option<&Path> {
         self.windows_ico.as_deref()
     }
