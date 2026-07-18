@@ -300,7 +300,14 @@ fn missing_manifest_file_produces_an_error_not_a_panic() {
     let missing = dir.path().join("does-not-exist.gui.toml");
     let (manifest, errors) = load_icon_manifest(&missing);
     assert!(manifest.entries().is_empty());
-    insta::assert_debug_snapshot!(summarize_errors(dir.path(), &errors));
+    // `std::io::Error`'s message text (embedded in `errors[0].message` via
+    // `graph.rs`'s `format!("failed to read file: {e}")`) is OS-specific
+    // ("The system cannot find the file specified." on Windows, "No such
+    // file or directory" on Linux) - filtered to a placeholder so this
+    // snapshot doesn't depend on which CI runner recorded it.
+    insta::with_settings!({filters => vec![(r#"failed to read file: [^"]*"#, "failed to read file: <os error>")]}, {
+        insta::assert_debug_snapshot!(summarize_errors(dir.path(), &errors));
+    });
 }
 
 #[test]

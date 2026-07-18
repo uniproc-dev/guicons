@@ -86,7 +86,18 @@ impl Backend {
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
 
         for file in declaring_files {
-            let Ok(file_uri) = Url::from_file_path(&file) else { continue };
+            // Reuse the request's own `uri` verbatim for the file the
+            // rename was actually triggered from, rather than re-deriving
+            // one from `file` (a canonicalized path) via
+            // `Url::from_file_path` - the two can disagree byte-for-byte
+            // even when they name the same file, if canonicalizing takes
+            // a different route back out than the client's own URI did
+            // (a temp-dir junction/symlink on some CI runners is exactly
+            // this: canonicalize resolves through it, the client's URI
+            // never did). A `changes` key the client's own open document
+            // doesn't match is an edit that silently applies to nothing.
+            let file_uri = if file == path { Some(uri.clone()) } else { Url::from_file_path(&file).ok() };
+            let Some(file_uri) = file_uri else { continue };
             let Some(file_text) = self.document_text_or_disk(&file_uri, &file).await else { continue };
             let file_index = LineIndex::new(&file_text);
             let edits: Vec<TextEdit> = header_family_ranges(&file_text, &old_family)
