@@ -282,11 +282,23 @@ pub async fn list_workspace_manifests(workspace_root: String) -> Vec<String> {
 // hand the actual blocking `ureq` call off to via `spawn_blocking`,
 // since `guicons_net`'s HTTP client is synchronous.
 
+/// The OS-wide cache dir every iconify-related FFI function here reads
+/// from/writes to - exposed so the icon browser can list what's already
+/// cached (e.g. the `.json` files under its `_collections` subdir)
+/// without duplicating this OS-specific lookup on the Kotlin side.
+#[uniffi::export]
+pub fn global_iconify_cache_dir() -> String {
+    guicons_net::global_cache_dir().to_string_lossy().into_owned()
+}
+
 /// Icon names already cached on disk for `provider` - empty if its
 /// collection hasn't been fetched yet (see [`download_iconify_collection`]).
+/// Backed by the OS-wide cache dir, not the calling project's workspace -
+/// the icon browser fetches the same provider listing regardless of which
+/// repo happens to be open, so there's no reason to redownload it per repo.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn cached_iconify_collection_names(workspace_root: String, provider: String) -> Vec<String> {
-    tokio::task::spawn_blocking(move || guicons_net::cached_collection_names(Path::new(&workspace_root), &provider))
+pub async fn cached_iconify_collection_names(provider: String) -> Vec<String> {
+    tokio::task::spawn_blocking(move || guicons_net::global_cached_collection_names(&provider))
         .await
         .ok()
         .flatten()
@@ -297,10 +309,8 @@ pub async fn cached_iconify_collection_names(workspace_root: String, provider: S
 /// isn't there already - `true` once it's cached (whether it already was,
 /// or this fetch succeeded), `false` on a network failure.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn download_iconify_collection(workspace_root: String, provider: String) -> bool {
-    tokio::task::spawn_blocking(move || guicons_net::download_collection(Path::new(&workspace_root), &provider))
-        .await
-        .unwrap_or(false)
+pub async fn download_iconify_collection(provider: String) -> bool {
+    tokio::task::spawn_blocking(move || guicons_net::global_download_collection(&provider)).await.unwrap_or(false)
 }
 
 /// Same `/search` endpoint iconify.design's own site search uses - empty
@@ -315,23 +325,19 @@ pub async fn search_iconify_icons(query: String, limit: u32) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Ensures `id` (`"prefix:name"`) is cached on disk, downloading it if
-/// needed - the local `.svg` path once it's there, `None` on a network
-/// failure.
+/// Fetches `id`'s (`"prefix:name"`) SVG bytes for the browser's preview
+/// pane/grid thumbnails - `None` on a network failure. Stateless on this
+/// side of the FFI boundary: never written to a repo's `.cache/guicons`,
+/// and not cached here either - the Kotlin caller (`IconPreviewCache`)
+/// owns caching this, since it's the only consumer this function has.
+/// Browsing/searching can touch far more icons than a user ever keeps, so
+/// that cache is deliberately TTL'd and in-memory rather than an on-disk
+/// one - an icon actually kept in the manifest still gets its own on-disk
+/// entry once `guicons-build`/`guicons fetch` needs it, independently of
+/// this.
 #[uniffi::export(async_runtime = "tokio")]
-pub async fn ensure_iconify_icon_cached(workspace_root: String, id: String) -> Option<String> {
-    tokio::task::spawn_blocking(move || {
-        let path = guicons_net::iconify_cache_path(Path::new(&workspace_root), &id);
-        if path.exists() {
-            return Some(path);
-        }
-        guicons_net::download(&guicons_net::iconify_url(&id), &path).ok()?;
-        Some(path)
-    })
-    .await
-    .ok()
-    .flatten()
-    .map(|path| path.to_string_lossy().into_owned())
+pub async fn fetch_iconify_icon_preview(id: String) -> Option<Vec<u8>> {
+    tokio::task::spawn_blocking(move || guicons_net::fetch_iconify_icon_preview(&id)).await.ok().flatten()
 }
 
 #[cfg(test)]

@@ -210,7 +210,6 @@ impl Backend {
     async fn warm_custom_providers(&self, uri: &Url) {
         let Some(path) = Self::path_for_uri(uri) else { return };
         let Some(text) = self.document_text(uri).await else { return };
-        let Some(workspace_root) = self.workspace_root().await else { return };
 
         let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
         let custom: Vec<String> = manifest
@@ -218,7 +217,7 @@ impl Backend {
             .filter(|name| !guicons_core::builtin_provider_names().any(|builtin| builtin == *name))
             .map(str::to_string)
             .collect();
-        iconify_completion::warm_provider_caches(self.client.clone(), workspace_root, custom);
+        iconify_completion::warm_provider_caches(self.client.clone(), custom);
     }
 }
 
@@ -302,9 +301,9 @@ impl LanguageServer for Backend {
         // lazily on first `didOpen` - by the time a user actually types
         // into an `iconify = "..."` field the cache is very likely warm
         // already, so `completion()` never has to touch the network.
+        let providers: Vec<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
+        iconify_completion::warm_provider_caches(self.client.clone(), providers);
         if let Some(workspace_root) = self.workspace_root().await {
-            let providers: Vec<String> = guicons_core::builtin_provider_names().map(str::to_string).collect();
-            iconify_completion::warm_provider_caches(self.client.clone(), workspace_root.clone(), providers);
             self.scan_workspace_manifests(&workspace_root).await;
         }
     }

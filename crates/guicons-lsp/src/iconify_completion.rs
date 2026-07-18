@@ -1,7 +1,10 @@
 //! Provider-name/icon-name completion for `iconify = "..."` values,
 //! backed by a disk cache of api.iconify.design's collection listings
 //! (the cache-path/parsing logic itself lives in `guicons_net`, shared
-//! with `guicons-ffi`'s icon-browser use of the same cache).
+//! with `guicons-ffi`'s icon-browser use of the same cache). Rooted at the
+//! OS-wide cache dir, not any one workspace - the same provider listing is
+//! useful across every project a client has open, so there's no reason to
+//! redownload and re-store it per repo.
 //!
 //! Warmed entirely in the background ([`warm_provider_caches`]) - never
 //! from `completion()` itself, which only ever reads whatever is already
@@ -10,7 +13,6 @@
 //! network call hiding inside a completion request.
 
 use std::ops::Range;
-use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::notification::Progress;
 use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
 use tower_lsp::lsp_types::{
@@ -21,14 +23,13 @@ use tower_lsp::Client;
 
 /// Icon names already cached on disk for `provider`, or `None` if its
 /// collection hasn't been warmed (or fetched) yet.
-pub fn cached_names(workspace_root: &Path, provider: &str) -> Option<Vec<String>> {
-    guicons_net::cached_collection_names(workspace_root, provider)
+pub fn cached_names(provider: &str) -> Option<Vec<String>> {
+    guicons_net::global_cached_collection_names(provider)
 }
 
-async fn warm_one(workspace_root: &Path, provider: &str) {
-    let workspace_root = workspace_root.to_path_buf();
+async fn warm_one(provider: &str) {
     let provider = provider.to_string();
-    let _ = tokio::task::spawn_blocking(move || guicons_net::download_collection(&workspace_root, &provider)).await;
+    let _ = tokio::task::spawn_blocking(move || guicons_net::global_download_collection(&provider)).await;
 }
 
 /// Spawns background warmup for every name in `providers` (deduplicated
@@ -36,7 +37,7 @@ async fn warm_one(workspace_root: &Path, provider: &str) {
 /// LSP clients are required to tolerate progress notifications for a
 /// token they never asked for, so this is safe to send unconditionally
 /// even if the client ends up ignoring it.
-pub fn warm_provider_caches(client: Client, workspace_root: PathBuf, providers: Vec<String>) {
+pub fn warm_provider_caches(client: Client, providers: Vec<String>) {
     if providers.is_empty() {
         return;
     }
@@ -58,7 +59,7 @@ pub fn warm_provider_caches(client: Client, workspace_root: PathBuf, providers: 
             .await;
 
         for provider in &providers {
-            warm_one(&workspace_root, provider).await;
+            warm_one(provider).await;
         }
 
         client

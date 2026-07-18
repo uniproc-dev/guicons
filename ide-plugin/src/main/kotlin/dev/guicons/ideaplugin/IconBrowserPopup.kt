@@ -45,9 +45,9 @@ import uniffi.guicons_ffi.ResolvedEntry
 import uniffi.guicons_ffi.builtinProviderNames
 import uniffi.guicons_ffi.cachedIconifyCollectionNames
 import uniffi.guicons_ffi.downloadIconifyCollection
-import uniffi.guicons_ffi.ensureIconifyIconCached
 import uniffi.guicons_ffi.entryAtOffset
 import uniffi.guicons_ffi.findManifestForRustFile
+import uniffi.guicons_ffi.globalIconifyCacheDir
 import uniffi.guicons_ffi.listManifestEntries
 import uniffi.guicons_ffi.macroCallAt
 import uniffi.guicons_ffi.parseSelector
@@ -180,12 +180,11 @@ class IconBrowserPopup(private val project: Project, private val editor: Editor,
 fun buildIconBrowserTabs(project: Project, editor: Editor, filePath: String, vertical: Boolean): JBTabbedPane {
     val isManifestFile = filePath.endsWith(".gui.toml")
     val manifestPath = if (isManifestFile) filePath else findManifestForRustFile(filePath)
-    val cacheRoot = manifestPath?.let { File(it).parent } ?: File(filePath).parent
 
     val tabs = JBTabbedPane()
     tabs.background = UIUtil.getTreeBackground()
-    val manifestTab = ManifestTab(project, editor, manifestPath, cacheRoot, vertical)
-    val iconifyTab = IconifyTab(project, editor, cacheRoot, vertical)
+    val manifestTab = ManifestTab(project, editor, manifestPath, vertical)
+    val iconifyTab = IconifyTab(project, editor, vertical)
     tabs.addTab("Manifest", manifestTab.component)
     tabs.addTab("Iconify", iconifyTab.component)
 
@@ -243,18 +242,6 @@ private fun treeItemOf(node: Any?): TreeItem? = (node as? DefaultMutableTreeNode
 private val TreeItem?.asLeafOrNull: TreeItem?
     get() = this?.takeUnless { it is TreeItem.Group }
 
-/** Walks up from `start` to find `.cache/guicons` the same way
- * `guicons-net`'s `workspace_cache_dir` does, purely to list what's
- * already cached on disk - not a network call. */
-private fun findWorkspaceCacheDir(start: File): File {
-    var dir: File? = start
-    while (dir != null) {
-        if (File(dir, "Cargo.toml").isFile) return File(dir, ".cache/guicons")
-        dir = dir.parentFile
-    }
-    return File(start, ".cache/guicons")
-}
-
 /** Decoded pixels, not a Swing `Icon` - [IconCard] needs to sample the
  * actual pixel colors to pick a background that contrasts with them. */
 private fun previewImage(assetPath: String?, sizePx: Int): BufferedImage? {
@@ -273,6 +260,18 @@ private fun previewImage(assetPath: String?, sizePx: Int): BufferedImage? {
     }
 }
 
+/** Same as [previewImage], but for an iconify id fetched purely
+ * in-memory ([IconPreviewCache]) rather than an asset already on disk -
+ * nothing here ever touches the filesystem. */
+private suspend fun iconifyPreviewImage(iconifyId: String, sizePx: Int): BufferedImage? {
+    val svgBytes = IconPreviewCache.get(iconifyId) ?: return null
+    return try {
+        ImageIO.read(ByteArrayInputStream(SvgRenderer.renderToPngBytes(svgBytes, sizePx)))
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /** [ResolvedEntry.sourceFile] is only ever set for a `file`-sourced entry
  * - an `iconify`-sourced one (`Source: iconify \`prefix:name\`` in the
  * details panel) has no local asset to read at all until it's actually
@@ -281,10 +280,10 @@ private fun previewImage(assetPath: String?, sizePx: Int): BufferedImage? {
  * ...)` and stayed blank forever for every iconify-sourced manifest
  * entry - not a network/rendering bug, the fetch was simply never
  * attempted. */
-private suspend fun manifestLeafPreviewImage(entry: ResolvedEntry, cacheRoot: String): BufferedImage? {
+private suspend fun manifestLeafPreviewImage(entry: ResolvedEntry): BufferedImage? {
     entry.sourceFile?.let { return previewImage(it, 256) }
     val iconifyId = entry.iconifyId ?: return null
-    return previewImage(ensureIconifyIconCached(cacheRoot, iconifyId), 256)
+    return iconifyPreviewImage(iconifyId, 256)
 }
 
 private fun replaceModel(tree: Tree, root: DefaultMutableTreeNode) {
@@ -794,7 +793,7 @@ private fun findLeafNode(node: DefaultMutableTreeNode, predicate: (TreeItem) -> 
  * file, since the caller might not have one at all), grouped
  * `manifest file -> family -> variant`, with a preview pane on the right
  * showing whatever's selected. */
-private class ManifestTab(project: Project, editor: Editor, manifestPath: String?, cacheRoot: String, vertical: Boolean) {
+private class ManifestTab(project: Project, editor: Editor, manifestPath: String?, vertical: Boolean) {
     val component: JComponent = JPanel(BorderLayout()).apply { background = UIUtil.getTreeBackground() }
     private val scope = IconBrowserScope.of(project)
     private val tree = buildTree()
@@ -816,7 +815,7 @@ private class ManifestTab(project: Project, editor: Editor, manifestPath: String
         })
         tree.addTreeSelectionListener(TreeSelectionListener {
             val item = treeItemOf(tree.lastSelectedPathComponent).asLeafOrNull
-            preview.show(item) { i -> (i as? TreeItem.ManifestLeaf)?.let { manifestLeafPreviewImage(it.entry, cacheRoot) } }
+            preview.show(item) { i -> (i as? TreeItem.ManifestLeaf)?.let { manifestLeafPreviewImage(it.entry) } }
             (item as? TreeItem.ManifestLeaf)?.entry?.let { highlightEntryIfFileOpen(project, it) }
         })
 
@@ -869,13 +868,13 @@ private class ManifestTab(project: Project, editor: Editor, manifestPath: String
  * `getListCellRendererComponent` calls (the standard `JList` renderer
  * pattern - one instance configured and returned each time, not a fresh
  * component per cell) with its own small thumbnail cache, since
- * [previewImage]/[ensureIconifyIconCached] are each too expensive to run
+ * [iconifyPreviewImage] is too expensive to run
  * synchronously inside a paint call for every visible cell on every
  * repaint. A cell whose icon isn't cached yet kicks off a fetch and
  * repaints the whole list once it lands - cheap enough for the handful of
  * cells actually visible at once, and simpler than tracking individual
  * cell rects. */
-private class IconGridCellRenderer(private val cacheRoot: String, private val scope: CoroutineScope) : JPanel(BorderLayout()), ListCellRenderer<TreeItem.IconifyLeaf> {
+private class IconGridCellRenderer(private val scope: CoroutineScope) : JPanel(BorderLayout()), ListCellRenderer<TreeItem.IconifyLeaf> {
     private val iconLabel = JLabel("", SwingConstants.CENTER)
     private val nameLabel = JLabel("", SwingConstants.CENTER)
     private val thumbnails = HashMap<String, Icon?>()
@@ -909,7 +908,7 @@ private class IconGridCellRenderer(private val cacheRoot: String, private val sc
     private fun maybeLoad(item: TreeItem.IconifyLeaf) {
         if (thumbnails.containsKey(item.id) || !loading.add(item.id)) return
         scope.launch {
-            val image = previewImage(ensureIconifyIconCached(cacheRoot, item.id), CARD_ICON_PX)
+            val image = iconifyPreviewImage(item.id, CARD_ICON_PX)
             val cardIcon = image?.let {
                 val cardBytes = IconPreviewCard.renderCardPng(it, CARD_SIZE_PX, CARD_ARC_PX)
                 ImageIO.read(ByteArrayInputStream(cardBytes))?.let(::ImageIcon)
@@ -935,7 +934,7 @@ private class IconGridCellRenderer(private val cacheRoot: String, private val sc
     }
 }
 
-private fun buildIconGrid(cacheRoot: String, scope: CoroutineScope): JBList<TreeItem.IconifyLeaf> {
+private fun buildIconGrid(scope: CoroutineScope): JBList<TreeItem.IconifyLeaf> {
     val list = JBList(DefaultListModel<TreeItem.IconifyLeaf>())
     list.layoutOrientation = JList.HORIZONTAL_WRAP
     list.visibleRowCount = 0
@@ -947,7 +946,7 @@ private fun buildIconGrid(cacheRoot: String, scope: CoroutineScope): JBList<Tree
     list.fixedCellWidth = JBUI.scale(64)
     list.fixedCellHeight = JBUI.scale(IconGridCellRenderer.CARD_SIZE_PX + 28)
     list.selectionMode = ListSelectionModel.SINGLE_SELECTION
-    list.cellRenderer = IconGridCellRenderer(cacheRoot, scope)
+    list.cellRenderer = IconGridCellRenderer(scope)
     return list
 }
 
@@ -996,12 +995,12 @@ private const val THRESHOLD_PX = 400
  * cached (see `guicons_net::cached_collection_names`), so "load more" is
  * really just "show more of what's already known" rather than an actual
  * fetch, except while actively searching (see [onNearBottom]). */
-private class IconifyTab(project: Project, editor: Editor, private val cacheRoot: String, vertical: Boolean) {
+private class IconifyTab(project: Project, editor: Editor, vertical: Boolean) {
     val component: JComponent = JPanel(BorderLayout()).apply { background = UIUtil.getTreeBackground() }
     private val searchField = SearchTextField()
     private val providerCombo = ComboBox<String>()
     private val scope = IconBrowserScope.of(project)
-    private val grid = buildIconGrid(cacheRoot, scope)
+    private val grid = buildIconGrid(scope)
     private val preview = PreviewPanel(project, scope) { item ->
         (item as? TreeItem.IconifyLeaf)?.let { IconInsertion.insert(editor, IconInsertion.iconifySelector(it.id)) }
     }
@@ -1026,7 +1025,7 @@ private class IconifyTab(project: Project, editor: Editor, private val cacheRoot
         grid.addListSelectionListener { e ->
             if (e.valueIsAdjusting) return@addListSelectionListener
             preview.show(grid.selectedValue) { item ->
-                (item as? TreeItem.IconifyLeaf)?.let { previewImage(ensureIconifyIconCached(cacheRoot, it.id), 256) }
+                (item as? TreeItem.IconifyLeaf)?.let { iconifyPreviewImage(it.id, 256) }
             }
         }
         grid.addMouseListener(object : MouseAdapter() {
@@ -1066,7 +1065,7 @@ private class IconifyTab(project: Project, editor: Editor, private val cacheRoot
      * this tab has never needed before just to show a picker). */
     private fun loadProviderList() {
         scope.launch {
-            val cachedPrefixes = File(findWorkspaceCacheDir(File(cacheRoot)), "_collections")
+            val cachedPrefixes = File(globalIconifyCacheDir(), "_collections")
                 .listFiles { f -> f.extension == "json" }
                 ?.map { it.nameWithoutExtension }
                 ?: emptyList()
@@ -1080,8 +1079,8 @@ private class IconifyTab(project: Project, editor: Editor, private val cacheRoot
 
     private fun loadProvider(provider: String) {
         scope.launch {
-            downloadIconifyCollection(cacheRoot, provider)
-            val names = cachedIconifyCollectionNames(cacheRoot, provider)
+            downloadIconifyCollection(provider)
+            val names = cachedIconifyCollectionNames(provider)
             allIds = names.map { "$provider:$it" }
             revealed = 0
             withContext(Dispatchers.EDT) { revealMore() }

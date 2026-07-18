@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 
 pub const ALLOW_NETWORK_ENV: &str = "GUICONS_ALLOW_NETWORK";
 
+/// Overrides where [`global_cache_dir`] points - lets tests (and anyone
+/// who wants their global icon-name cache somewhere other than the OS
+/// default) redirect it without actually touching `~/.cache` or its
+/// platform equivalents.
+pub const CACHE_DIR_ENV: &str = "GUICONS_CACHE_DIR";
+
 #[derive(Debug)]
 pub struct DownloadError(String);
 
@@ -33,6 +39,45 @@ pub fn url_cache_path(start: &Path, url: &str) -> PathBuf {
     workspace_cache_dir(start).join("url").join(format!("{}.svg", sha256_hex(url)))
 }
 
+/// Iconify's *name listings* (`prefix -> [names]`, used to power
+/// `iconify = "..."` completion) live in the OS-wide cache dir rather than
+/// a workspace's `.cache/guicons` - the LSP and IDE plugin want the same
+/// listing regardless of which repo happens to be open, so there's no
+/// reason to redownload and restore it per repo. The actual icon SVGs
+/// fetched via [`iconify_cache_path`]/[`ensure_cached`] stay
+/// workspace-rooted, same as ever - those *are* build/preview output a
+/// given repo owns (and `guicons-build`'s fixtures pre-seed them on
+/// purpose), unlike a plain list of names.
+pub fn global_collection_cache_path(provider: &str) -> PathBuf {
+    global_cache_dir().join("_collections").join(format!("{provider}.json"))
+}
+
+/// Global-cache counterpart of [`cached_collection_names`].
+pub fn global_cached_collection_names(provider: &str) -> Option<Vec<String>> {
+    let content = fs::read_to_string(global_collection_cache_path(provider)).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    Some(flatten_names(&json))
+}
+
+/// Global-cache counterpart of [`download_collection`].
+pub fn global_download_collection(provider: &str) -> bool {
+    let dest = global_collection_cache_path(provider);
+    if dest.exists() {
+        return true;
+    }
+    download(&collection_url(provider), &dest).is_ok()
+}
+
+/// Public so the IDE plugin can list what's already cached (e.g. which
+/// providers' collections it can offer without a network round-trip)
+/// without duplicating this OS-specific lookup on the Kotlin side.
+pub fn global_cache_dir() -> PathBuf {
+    if let Some(dir) = env::var_os(CACHE_DIR_ENV) {
+        return PathBuf::from(dir);
+    }
+    dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".guicons-cache")).join("guicons")
+}
+
 pub fn ensure_cached(cache_path: &Path, url: &str) {
     if cache_path.exists() {
         return;
@@ -50,9 +95,15 @@ pub fn ensure_cached(cache_path: &Path, url: &str) {
 /// already exists or `GUICONS_ALLOW_NETWORK` is set - callers that need
 /// those checks (like `ensure_cached`) do them first.
 pub fn download(url: &str, dest: &Path) -> Result<(), DownloadError> {
+    let bytes = fetch_bytes(url)?;
     if let Some(parent) = dest.parent() {
         let _ = fs::create_dir_all(parent);
     }
+    fs::write(dest, bytes)
+        .map_err(|e| DownloadError(format!("Failed to write cache file {}: {e}", dest.display())))
+}
+
+fn fetch_bytes(url: &str) -> Result<Vec<u8>, DownloadError> {
     let response = ureq::get(url)
         .call()
         .map_err(|e| DownloadError(format!("Failed to download `{url}`: {e}")))?;
@@ -61,8 +112,21 @@ pub fn download(url: &str, dest: &Path) -> Result<(), DownloadError> {
     reader
         .read_to_end(&mut bytes)
         .map_err(|e| DownloadError(format!("Failed to read `{url}`: {e}")))?;
-    fs::write(dest, bytes)
-        .map_err(|e| DownloadError(format!("Failed to write cache file {}: {e}", dest.display())))
+    Ok(bytes)
+}
+
+/// Fetches `id`'s SVG bytes for preview/browsing purposes - `None` on a
+/// network failure. Deliberately stateless: this crate's only caller for
+/// it is `guicons-ffi` (in turn only called by the IDE plugin), so any
+/// caching belongs on that single caller's side rather than here - see
+/// `IconPreviewCache` in the IDE plugin's Kotlin, which is what actually
+/// avoids redownloading/rewriting on every scroll/repaint, TTL'd so a
+/// long-running IDE process doesn't accumulate every SVG a user has ever
+/// scrolled past. Never written to any repo's `.cache/guicons` either way
+/// - an icon a user actually keeps still gets its own on-disk entry once
+/// `guicons-build`/`guicons fetch` needs it, independently of this.
+pub fn fetch_iconify_icon_preview(id: &str) -> Option<Vec<u8>> {
+    fetch_bytes(&iconify_url(id)).ok()
 }
 
 pub fn iconify_url(id: &str) -> String {

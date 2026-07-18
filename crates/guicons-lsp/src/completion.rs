@@ -115,10 +115,7 @@ impl Backend {
                 }
                 IconifyContext::Name { provider, range, typed } => {
                     let range = index.range(&text, range);
-                    let names = match self.workspace_root().await {
-                        Some(workspace_root) => iconify_completion::cached_names(&workspace_root, &provider),
-                        None => None,
-                    };
+                    let names = iconify_completion::cached_names(&provider);
                     // Some collections run into the thousands of names
                     // (e.g. `mdi` has ~7500) - sending every match on each
                     // keystroke is wasted bandwidth and a slow render on

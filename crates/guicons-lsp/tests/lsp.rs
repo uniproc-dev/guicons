@@ -41,6 +41,22 @@ fn write(dir: &Path, name: &str, content: &str) -> std::path::PathBuf {
     path
 }
 
+/// Iconify name-completion is backed by a process-global cache dir now
+/// ([`guicons_net::CACHE_DIR_ENV`]), not a per-test workspace - tests that
+/// need to pre-seed it redirect that global env var to their own tempdir
+/// instead. Guarded by a mutex (env vars are process state, and `cargo
+/// test` runs test fns on multiple threads by default) so two such tests
+/// can never clobber each other's override mid-run.
+static CACHE_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn seed_global_iconify_cache(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
+    let guard = CACHE_DIR_ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // SAFETY: serialized by `CACHE_DIR_ENV_LOCK` above - no other thread
+    // reads or writes `GUICONS_CACHE_DIR` while this guard is held.
+    unsafe { std::env::set_var(guicons_net::CACHE_DIR_ENV, dir) };
+    guard
+}
+
 #[tokio::test]
 async fn diagnostics_reported_for_invalid_manifest_content_on_open() {
     let dir = tempdir().unwrap();
@@ -697,7 +713,9 @@ async fn completion_inside_an_iconify_value_before_the_colon_lists_provider_name
 #[tokio::test]
 async fn completion_inside_an_iconify_value_after_the_colon_lists_cached_icon_names() {
     let dir = tempdir().unwrap();
-    let cache_dir = dir.path().join(".cache/guicons/_collections");
+    let global_cache = tempdir().unwrap();
+    let _env_guard = seed_global_iconify_cache(global_cache.path());
+    let cache_dir = global_cache.path().join("_collections");
     fs::create_dir_all(&cache_dir).unwrap();
     fs::write(
         cache_dir.join("mdi.json"),
@@ -772,7 +790,9 @@ async fn completion_inside_an_iconify_value_after_the_colon_lists_cached_icon_na
 #[tokio::test]
 async fn completion_inside_an_iconify_value_caps_a_huge_collection_and_marks_it_incomplete() {
     let dir = tempdir().unwrap();
-    let cache_dir = dir.path().join(".cache/guicons/_collections");
+    let global_cache = tempdir().unwrap();
+    let _env_guard = seed_global_iconify_cache(global_cache.path());
+    let cache_dir = global_cache.path().join("_collections");
     fs::create_dir_all(&cache_dir).unwrap();
     let names: Vec<String> = (0..500).map(|i| format!("icon-{i:04}")).collect();
     fs::write(cache_dir.join("mdi.json"), json!({ "prefix": "mdi", "uncategorized": names }).to_string()).unwrap();
