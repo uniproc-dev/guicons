@@ -61,8 +61,13 @@ jobs:
       # through pkg-config) - not something `ci.yml`'s own ubuntu job ever
       # needed, since the fixtures live outside the main workspace and
       # only this nested build actually compiles them.
-      - name: Install slint build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+      - name: Install slint build/runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config xvfb
 
+      # One of the fixture's own tests actually instantiates a real Slint
+      # `AppWindow` (proving the codegen'd .slint is valid, not just that
+      # it compiles) - winit needs a live X/Wayland display for that even
+      # with software rendering, which a headless runner doesn't have.
+      # xvfb-run gives it a fake one.
       - name: Run fixture e2e tests
-        run: cargo test -p guicons-build --test fixture_crates -- --ignored
+        run: xvfb-run -a cargo test -p guicons-build --test fixture_crates -- --ignored
