@@ -62,7 +62,7 @@ jobs:
       # needed, since the fixtures live outside the main workspace and
       # only this nested build actually compiles them.
       - name: Install slint build/runtime dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config xvfb
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config xvfb libxkbcommon-x11-0
 
       # One of the fixture's own tests actually instantiates a real Slint
       # `AppWindow` (proving the codegen'd .slint is valid, not just that
