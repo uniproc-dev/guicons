@@ -4,7 +4,12 @@ use guicons_core::{rust_const_name, rust_fn_name, rust_variant_name};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub(crate) fn generate_rust_icon_registry_from_materialized(manifest_path: &Path, out_file: &Path, icons: &[MaterializedIcon]) {
+pub(crate) fn generate_rust_icon_registry_from_materialized(
+    manifest_path: &Path,
+    out_file: &Path,
+    icons: &[MaterializedIcon],
+    slint_image_resolver: bool,
+) {
     let key_consts = icons
         .iter()
         .map(|icon| {
@@ -105,6 +110,12 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(manifest_path: &Path
 
     let builders = generate_builders(icons);
 
+    let slint_resolver = if slint_image_resolver {
+        "\npub fn resolve_image<'a>(icon: impl Into<IconRef<'a>>) -> slint::Image {\n    resolve(icon).and_then(guicons::slint::image_from_data).unwrap_or_default()\n}\n"
+    } else {
+        ""
+    };
+
     let generated = format!(
         r#"// AUTO-GENERATED from {}
 use guicons::{{IconData, IconFamily, IconKey, IconRef, IconVariant}};
@@ -177,7 +188,7 @@ pub fn data_for(key: IconKey) -> Option<IconData> {{
 pub fn resolve<'a>(icon: impl Into<IconRef<'a>>) -> Option<IconData> {{
     key_from_ref(icon.into()).and_then(data_for)
 }}
-"#,
+{slint_resolver}"#,
         manifest_file_name(manifest_path)
     );
 

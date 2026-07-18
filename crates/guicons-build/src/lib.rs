@@ -41,6 +41,7 @@ pub struct IconBuild {
     materialized_root: PathBuf,
     emit_rust: bool,
     emit_slint: bool,
+    slint_image_resolver: bool,
 }
 
 impl IconBuild {
@@ -52,6 +53,7 @@ impl IconBuild {
             out_dir,
             emit_rust: false,
             emit_slint: false,
+            slint_image_resolver: false,
         }
     }
 
@@ -72,6 +74,15 @@ impl IconBuild {
         self
     }
 
+    /// Also emit a `resolve_image()` Rust helper next to `resolve()` that
+    /// resolves straight to a `slint::Image` via `guicons::slint::image_from_data`.
+    /// Only meaningful together with `.emit(Emit::Rust)`; the consumer must
+    /// depend on `slint` and on `guicons` with its `slint` feature enabled.
+    pub fn with_slint_image_resolver(mut self) -> Self {
+        self.slint_image_resolver = true;
+        self
+    }
+
     pub fn build(self) {
         let manifest = load_icon_manifest(&self.manifest_path);
         let icons = materialize_icons(&manifest, &self.materialized_root);
@@ -82,6 +93,7 @@ impl IconBuild {
                 manifest.manifest_path(),
                 &out_file,
                 &icons,
+                self.slint_image_resolver,
             );
         }
 
