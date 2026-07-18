@@ -13,9 +13,17 @@ fn write(dir: &Path, name: &str, content: &str) -> PathBuf {
 }
 
 /// Renders `path` relative to `dir` with `/` separators, for stable snapshots.
+/// Canonicalizes with `guicons_core::canonicalize_or_self` (not raw
+/// `std::fs::canonicalize`) to match how production actually resolves a
+/// manifest's directory (`graph.rs` canonicalizes every manifest path it
+/// loads) - using a different canonicalization than production here made
+/// `dir`'s resolved form disagree with an entry's already-canonicalized
+/// source path on Windows (`\\?\`-prefix and temp-dir aliasing both
+/// differ from `dunce`'s output), so the prefix strip below silently fell
+/// through to the last-resort "whole absolute path" branch.
 fn rel(dir: &Path, path: &Path) -> String {
-    let dir_canon = fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    let path_canon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dir_canon = canonicalize_or_self(dir);
+    let path_canon = canonicalize_or_self(path);
     if let Ok(suffix) = path_canon.strip_prefix(&dir_canon) {
         return suffix.display().to_string().replace('\\', "/");
     }

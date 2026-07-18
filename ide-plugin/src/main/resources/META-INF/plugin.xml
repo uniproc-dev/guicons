@@ -3,13 +3,6 @@
     <name>guicons</name>
     <vendor>guicons</vendor>
 
-    <description><![CDATA[
-        Native icon preview for guicons' <code>icon!</code>/<code>icon_key!</code>/<code>icon_data!</code>
-        macro calls - shows the resolved icon directly in the Quick Documentation
-        popup (Ctrl+Q / F1), instead of just a text description like the LSP's
-        own hover already provides.
-    ]]></description>
-
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.lsp</depends>
     <depends>com.jetbrains.rust</depends>
