@@ -9,7 +9,7 @@ expression: entries
         variant: None,
         size: None,
         source: File(
-            "/workspace\\settings.svg",
+            "/workspace/settings.svg",
         ),
         dynamic: false,
         windows_ico: None,

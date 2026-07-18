@@ -1204,6 +1204,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1815,7 +1821,7 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "guicons"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-macros",
  "image",
@@ -1824,7 +1830,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-build"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-core",
  "guicons-net",
@@ -1833,8 +1839,9 @@ dependencies = [
 
 [[package]]
 name = "guicons-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "dunce",
  "petgraph",
  "syn",
  "toml-span",
@@ -1854,7 +1861,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-core",
  "guicons-net",
@@ -1865,7 +1872,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-net"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dirs",
  "guicons-core",

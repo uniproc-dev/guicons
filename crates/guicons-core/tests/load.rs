@@ -1,4 +1,4 @@
-use guicons_core::{load_icon_manifest, load_icon_manifest_from_str, IconEntry, IconEntrySource, ManifestError};
+use guicons_core::{canonicalize_or_self, load_icon_manifest, load_icon_manifest_from_str, IconEntry, IconEntrySource, ManifestError};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
@@ -405,8 +405,8 @@ fn entries_carry_the_file_they_were_declared_in_even_across_includes() {
     let (manifest, errors) = load_icon_manifest(&root);
     assert!(errors.is_empty(), "{errors:?}");
 
-    let root_canon = fs::canonicalize(&root).unwrap_or(root);
-    let nav_canon = fs::canonicalize(&nav).unwrap_or(nav);
+    let root_canon = canonicalize_or_self(&root);
+    let nav_canon = canonicalize_or_self(&nav);
 
     assert_eq!(manifest.entry_for_key("docker").unwrap().file(), root_canon);
     assert_eq!(manifest.entry_for_key("back").unwrap().file(), nav_canon);

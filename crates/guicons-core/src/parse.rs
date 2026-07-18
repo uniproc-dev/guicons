@@ -723,6 +723,27 @@ mod tests {
         (entries, errors.into_iter().map(|e| e.message).collect())
     }
 
+    /// `insta::assert_debug_snapshot!`, but normalizing a `\`-separated
+    /// Windows path to `/` first - `PathBuf`'s `Debug` output is
+    /// inherently platform-dependent (`resolve_file_from_roots`/
+    /// `resolve_workspace_path` join with the host OS's separator), so a
+    /// snapshot recorded on Windows and one recorded on Linux would
+    /// otherwise never agree even when the paths are logically identical.
+    /// A macro, not a function - insta names a snapshot after its
+    /// *immediate* calling function (via `#[track_caller]`), so a `fn`
+    /// wrapper would make every call site share one made-up
+    /// `assert_snapshot_normalized-N` name instead of each test's own.
+    /// Only used by the handful of tests below whose `entries`/`defaults`
+    /// actually embed a path - every other `assert_debug_snapshot!` call
+    /// in this module snapshots something path-free and is untouched.
+    macro_rules! assert_snapshot_normalized {
+        ($value:expr) => {
+            insta::with_settings!({filters => vec![(r"\\+", "/")]}, {
+                insta::assert_debug_snapshot!($value);
+            });
+        };
+    }
+
     fn defaults_for(toml: &str) -> (ManifestDefaults, Vec<String>) {
         let mut root = toml_span::parse(toml).expect("valid toml");
         let mut table = take_table(&mut root).expect("root must be a table");
@@ -748,7 +769,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(entries);
+        assert_snapshot_normalized!(entries);
     }
 
     #[test]
@@ -762,7 +783,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(entries);
+        assert_snapshot_normalized!(entries);
     }
 
     #[test]
@@ -775,7 +796,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(entries);
+        assert_snapshot_normalized!(entries);
     }
 
     #[test]
@@ -904,7 +925,7 @@ mod tests {
             "#,
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(defaults);
+        assert_snapshot_normalized!(defaults);
     }
 
     #[test]
@@ -938,7 +959,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(entries);
+        assert_snapshot_normalized!(entries);
     }
 
     #[test]
@@ -951,7 +972,7 @@ mod tests {
             with_root(),
         );
         assert!(errors.is_empty(), "{errors:?}");
-        insta::assert_debug_snapshot!(entries);
+        assert_snapshot_normalized!(entries);
     }
 
     #[test]

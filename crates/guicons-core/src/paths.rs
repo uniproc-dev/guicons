@@ -19,8 +19,17 @@ pub(crate) fn resolve_entry_path(root: &Path, value: &str) -> PathBuf {
     }
 }
 
+/// `dunce::canonicalize`, not `std::fs::canonicalize` - on Windows the
+/// latter prefixes the result with the `\\?\` verbatim path marker, which
+/// then leaks into any `file://` URI built from it (`Url::from_file_path`
+/// has no idea it's not a real path segment) and stops matching the
+/// plain, non-canonicalized URI a real LSP client sends for the same
+/// file. Hit exactly this: `textDocument/rename`'s workspace edit came
+/// back keyed by a `\\?\`-derived URI the client never actually opened,
+/// so the edit silently applied to nothing. `dunce` canonicalizes the
+/// same way otherwise, just without ever emitting that prefix.
 pub fn canonicalize_or_self(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Walks up from `start` looking for the nearest `Cargo.toml` that declares

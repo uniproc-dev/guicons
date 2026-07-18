@@ -11,7 +11,7 @@ expression: entries
             20,
         ),
         source: File(
-            "/workspace\\settings-20.svg",
+            "/workspace/settings-20.svg",
         ),
         dynamic: false,
         windows_ico: None,

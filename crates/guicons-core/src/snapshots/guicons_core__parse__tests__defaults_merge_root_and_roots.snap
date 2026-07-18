@@ -4,9 +4,9 @@ expression: defaults
 ---
 ManifestDefaults {
     roots: [
-        "/workspace\\a",
-        "/workspace\\b",
-        "/workspace\\c",
+        "/workspace/a",
+        "/workspace/b",
+        "/workspace/c",
     ],
     provider: None,
     size: None,

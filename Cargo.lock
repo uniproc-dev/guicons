@@ -1690,6 +1690,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "either"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2448,7 +2454,7 @@ checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
 
 [[package]]
 name = "guicons"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-macros",
  "iced",
@@ -2458,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-build"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "criterion",
  "guicons-core",
@@ -2470,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "guicons-core",
@@ -2483,8 +2489,9 @@ dependencies = [
 
 [[package]]
 name = "guicons-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
+ "dunce",
  "insta",
  "petgraph",
  "proptest",
@@ -2497,7 +2504,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-ffi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-core",
  "guicons-net",
@@ -2508,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-lsp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-core",
  "guicons-net",
@@ -2522,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-macros"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "guicons-core",
  "guicons-net",
@@ -2533,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "guicons-net"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "dirs",
  "guicons-core",
@@ -3452,7 +3459,9 @@ checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console",
  "once_cell",
+ "regex",
  "similar",
+ "strip-ansi-escapes",
  "tempfile",
 ]
 
@@ -6186,6 +6195,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "strip-ansi-escapes"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a8f8038e7e7969abb3f1b7c2a811225e9296da208539e0f79c5251d6cac0025"
+dependencies = [
+ "vte",
+]
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7153,6 +7171,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "vte"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

@@ -11,7 +11,7 @@ expression: entries
         ),
         size: None,
         source: File(
-            "/workspace\\settings-filled.svg",
+            "/workspace/settings-filled.svg",
         ),
         dynamic: false,
         windows_ico: None,
@@ -26,7 +26,7 @@ expression: entries
         ),
         size: None,
         source: File(
-            "/workspace\\settings-regular.svg",
+            "/workspace/settings-regular.svg",
         ),
         dynamic: false,
         windows_ico: None,
