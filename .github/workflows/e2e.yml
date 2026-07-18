@@ -56,5 +56,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The fixture crates pull in `slint`, which needs `fontconfig` at
+      # build time (via `yeslogic-fontconfig-sys`, a system lib found
+      # through pkg-config) - not something `ci.yml`'s own ubuntu job ever
+      # needed, since the fixtures live outside the main workspace and
+      # only this nested build actually compiles them.
+      - name: Install slint build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev pkg-config
+
       - name: Run fixture e2e tests
         run: cargo test -p guicons-build --test fixture_crates -- --ignored
