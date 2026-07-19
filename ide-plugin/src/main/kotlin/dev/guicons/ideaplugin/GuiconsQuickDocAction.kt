@@ -1,6 +1,8 @@
 package dev.guicons.ideaplugin
 
-import com.intellij.codeInsight.documentation.actions.ShowQuickDocInfoAction
+import com.intellij.codeInsight.documentation.DocumentationManager
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -23,19 +25,22 @@ import javax.swing.JEditorPane
  * arguments) - so neither provider is ever invoked for that case, no
  * matter how they're registered.
  *
- * The dotted-path form (`icon!(family.variant)`) already works fine
- * through the normal providers with the platform's own nicely themed
- * popup - this class deliberately leaves that case to `super`, only
- * building its own popup for the string-literal case the platform can't
- * resolve on its own.
+ * The dotted-path form (`icon!(family.variant)`) and everything unrelated
+ * to guicons already work fine through the normal providers - this class
+ * deliberately leaves those to [DocumentationManager] (the legacy,
+ * genuinely public entry point `GuiconsDocumentationProvider` itself
+ * plugs into), only building its own popup for the string-literal case
+ * the platform can't resolve on its own. Extends the plain `AnAction`,
+ * not `ShowQuickDocInfoAction` - that class is `@ApiStatus.Internal`
+ * (confirmed via the Marketplace's Plugin Verifier flagging it), so
+ * subclassing it to reuse `update`/`actionPerformed` would itself be an
+ * internal-API violation.
  */
-class GuiconsQuickDocAction : ShowQuickDocInfoAction() {
+class GuiconsQuickDocAction : AnAction() {
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
     override fun update(e: AnActionEvent) {
-        if (renderAt(e) != null) {
-            e.presentation.isEnabled = true
-            return
-        }
-        super.update(e)
+        e.presentation.isEnabled = renderAt(e) != null || defaultTargetElement(e) != null
     }
 
     override fun actionPerformed(e: AnActionEvent) {
@@ -44,7 +49,16 @@ class GuiconsQuickDocAction : ShowQuickDocInfoAction() {
             showPopup(e, html)
             return
         }
-        super.actionPerformed(e)
+        val project = e.project ?: return
+        val editor = e.getData(CommonDataKeys.EDITOR) ?: return
+        val file = e.getData(CommonDataKeys.PSI_FILE) ?: return
+        DocumentationManager.getInstance(project).showJavaDocInfo(editor, file, true)
+    }
+
+    private fun defaultTargetElement(e: AnActionEvent) = e.project?.let { project ->
+        val editor = e.getData(CommonDataKeys.EDITOR) ?: return@let null
+        val file = e.getData(CommonDataKeys.PSI_FILE) ?: return@let null
+        DocumentationManager.getInstance(project).findTargetElement(editor, file)
     }
 
     /** Only the string-literal case - the dotted-path form is left to `super`. */
