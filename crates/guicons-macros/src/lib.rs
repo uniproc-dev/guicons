@@ -270,13 +270,11 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
         },
         #[cfg(feature = "windows-reactor")]
         Target::WindowsReactor => match resolved {
-            // A builder, not a finished `Icon` - the use site sets the size
-            // (`icon!(x).size(16.0)`), then `.build()` or `Into<Icon>`.
             ResolvedSource::Image { path, .. } => quote! {
                 guicons::windows_reactor::icon_builder(#path)
             },
-            ResolvedSource::Glyph { font_family, codepoint } => quote! {
-                guicons::windows_reactor::glyph_icon(#font_family, #codepoint)
+            ResolvedSource::Glyph { codepoint, .. } => quote! {
+                guicons::windows_reactor::glyph_icon(#codepoint)
             },
         },
     }

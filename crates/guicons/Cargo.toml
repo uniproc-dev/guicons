@@ -14,23 +14,11 @@ iced = ["dep:iced", "guicons-macros?/iced"]
 windows-reactor = ["dep:windows-reactor", "guicons-macros?/windows-reactor"]
 
 [dependencies]
-guicons-macros = { path = "../guicons-macros", version = "0.3.2", optional = true }
+guicons-macros = { path = "../guicons-macros", version = "0.4.0", optional = true }
 slint = { version = "1.15.1", optional = true }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 iced = { version = "0.14", optional = true, features = ["svg", "image"] }
-# A plain crates-io-style requirement, not a direct git dependency:
-# windows-reactor isn't published there (crates.io only has a reserved
-# placeholder at 0.0.0), so this is never actually resolved against the
-# registry - both this repo's own build/CI and any downstream crates-io
-# install of guicons need their own
-# `[patch.crates-io] windows-reactor = { git = "...", rev = "..." }`
-# pointing at the fork (see this workspace's own root Cargo.toml). The
-# requirement is pinned to "0.0.0" because that is simultaneously the
-# version of the reserved crates.io placeholder (so `cargo publish`,
-# which re-resolves against the registry, is satisfied - a wildcard is
-# rejected server-side on upload) and the version the fork's crate
-# declares, so the `[patch]` swap stays semver-compatible.
-windows-reactor = { version = "0.0.0", optional = true }
+windows-reactor = { version = "0.100.0", optional = true }
 
 [[example]]
 name = "slint_icon"

@@ -1,30 +1,30 @@
+use windows_reactor::{FontIcon, Image, ImageIcon, LayoutControl, View};
+
 pub const DEFAULT_ICON_SIZE: f64 = 16.0;
 
-pub fn uri_from_path(path: &str) -> String {
-    if path.contains("://") {
-        path.to_string()
+/// `Image` for a file path or URI; an unset `Image` if the source is rejected.
+pub fn image_from_path(path: &str) -> Image {
+    let image = Image::new();
+    let image = if path.contains("://") {
+        image.source(path)
     } else {
-        format!("file:///{}", path.replace('\\', "/"))
-    }
+        image.source_file(path)
+    };
+    image.unwrap_or_default()
 }
 
-pub fn image_from_path(path: &str) -> windows_reactor::Image {
-    windows_reactor::Image::new_with_uri(uri_from_path(path))
+/// `ImageIcon` for a file path or URI; an unset `ImageIcon` if the source is rejected.
+pub fn image_icon_from_path(path: &str) -> ImageIcon {
+    let icon = ImageIcon::new();
+    let icon = if path.contains("://") {
+        icon.source(path)
+    } else {
+        icon.source_file(path)
+    };
+    icon.unwrap_or_default()
 }
 
-/// Size-less: an `IconElement` slot (button/nav-item icon, ...) has no place
-/// to apply a width/height anyway - sizing only matters for the
-/// [`icon_builder`]/[`IconBuilder::build_element`] path, which returns a
-/// plain sized `Image` instead of going through `Icon` at all.
-pub fn icon_from_path(path: &str) -> windows_reactor::Icon {
-    windows_reactor::Icon::image(uri_from_path(path))
-}
-
-/// What `icon!(...)` expands to under the `windows-reactor` feature: an icon
-/// with the source resolved, sizing applied only if the call site actually
-/// wants a standalone sized image ([`IconBuilder::build_element`]) - `.build()`
-/// for an `IconElement` slot ignores it, since `windows_reactor::Icon` has no
-/// size field to put it in.
+/// What `icon!(...)` expands to under the `windows-reactor` feature.
 pub struct IconBuilder {
     path: String,
     width: Option<f64>,
@@ -52,29 +52,27 @@ impl IconBuilder {
         self
     }
 
-    /// For an `IconElement` slot (button/nav-item `.icon(...)`) - no size
-    /// applied, `windows_reactor::Icon` has nowhere to put it.
-    pub fn build(self) -> windows_reactor::Icon {
-        icon_from_path(&self.path)
+    /// An `ImageIcon` for an icon slot (`.icon(...)`), sized only if a size was set.
+    pub fn build(self) -> View {
+        image_icon_from_path(&self.path).width(self.width).height(self.height).into()
     }
 
-    /// For a standalone, explicitly-sized icon (a table cell, a custom
-    /// layout) - bypasses `Icon` entirely and returns a real `Image` with
-    /// `.width()/.height()` already applied.
-    pub fn build_element(self) -> windows_reactor::Element {
-        use windows_reactor::ElementExt;
-        windows_reactor::Element::from(image_from_path(&self.path))
+    /// A standalone `Image`, [`DEFAULT_ICON_SIZE`] unless a size was set.
+    pub fn build_element(self) -> View {
+        image_from_path(&self.path)
             .width(self.width.unwrap_or(DEFAULT_ICON_SIZE))
             .height(self.height.unwrap_or(DEFAULT_ICON_SIZE))
+            .into()
     }
 }
 
-impl From<IconBuilder> for windows_reactor::Icon {
+impl From<IconBuilder> for View {
     fn from(builder: IconBuilder) -> Self {
         builder.build()
     }
 }
 
-pub fn glyph_icon(font_family: &str, codepoint: char) -> windows_reactor::Icon {
-    windows_reactor::Icon::Font { glyph: codepoint.to_string(), family: Some(font_family.to_string()) }
+/// A `FontIcon` for `codepoint`, rendered in the platform symbol font.
+pub fn glyph_icon(codepoint: char) -> View {
+    FontIcon::new().glyph(codepoint.to_string()).into()
 }
