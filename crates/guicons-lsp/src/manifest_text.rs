@@ -142,6 +142,64 @@ pub fn iconify_field_at(text: &str, offset: usize) -> Option<(std::ops::Range<us
     quoted_prefix_span_at(text, offset)
 }
 
+/// If `offset` is inside a `paint = "..."` value (also inside an inline
+/// table), returns the byte range typed so far plus that text.
+pub fn paint_field_at(text: &str, offset: usize) -> Option<(std::ops::Range<usize>, String)> {
+    let (span, prefix) = quoted_prefix_span_at(text, offset)?;
+    let line_start = line_start_of(text, offset);
+    (key_before_value(&text[line_start..span.start - 1])? == "paint").then_some((span, prefix))
+}
+
+/// Whether `offset` is where a key goes inside an inline table on its line
+/// (`variants.filled = { file = "x.svg", | }`).
+pub fn inline_table_key_at(text: &str, offset: usize) -> bool {
+    let before = &text[line_start_of(text, offset)..offset];
+    if is_inside_string_literal(before, before.len()) {
+        return false;
+    }
+    let Some(open) = before.rfind('{') else { return false };
+    if before[open..].contains('}') {
+        return false;
+    }
+    let tail = before[open + 1..].rsplit(',').next().unwrap_or_default();
+    tail.trim_start().chars().all(is_key_char)
+}
+
+/// Every `paint = "..."` string value in `text`: the byte range inside the
+/// quotes and the raw value.
+pub fn paint_values(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut values = Vec::new();
+    let mut line_start = 0usize;
+    for line in text.split_inclusive('\n') {
+        let mut search = 0;
+        while let Some(rel_start) = line[search..].find('"') {
+            let quote_start = search + rel_start;
+            if line[search..quote_start].contains('#') {
+                break;
+            }
+            let Some(rel_end) = line[quote_start + 1..].find('"') else { break };
+            let quote_end = quote_start + 1 + rel_end;
+            if key_before_value(&line[..quote_start]) == Some("paint") {
+                let value = &line[quote_start + 1..quote_end];
+                values.push((line_start + quote_start + 1..line_start + quote_end, value.to_string()));
+            }
+            search = quote_end + 1;
+        }
+        line_start += line.len();
+    }
+    values
+}
+
+fn key_before_value(before: &str) -> Option<&str> {
+    let before = before.trim_end().strip_suffix('=')?.trim_end();
+    let key = &before[before.trim_end_matches(is_key_char).len()..];
+    (!key.is_empty()).then_some(key)
+}
+
+fn is_key_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '-' || c == '_'
+}
+
 /// If `offset` is inside a quoted string on its line, returns the byte
 /// range from the opening quote up to `offset` (not the whole string -
 /// only what's been typed so far) plus that same text as an owned prefix.
@@ -210,8 +268,8 @@ pub struct KeywordDoc {
 
 const KEYWORD_DOCS: &[(&str, KeywordDoc)] = &[
     ("defaults", KeywordDoc {
-        description: "Shared defaults inherited by every entry in this file: `root`, `provider`, `size`.",
-        example: "[defaults]\nroot = \"assets/icons\"\nprovider = \"fluent\"\nsize = 24",
+        description: "Shared defaults inherited by every entry in this file: `root`, `provider`, `size`, `paint`.",
+        example: "[defaults]\nroot = \"assets/icons\"\nprovider = \"fluent\"\nsize = 24\npaint = \"#1e1e1e\"",
     }),
     ("root", KeywordDoc {
         description: "Base directory `file`/`windows-ico` paths resolve against.",
@@ -272,6 +330,10 @@ const KEYWORD_DOCS: &[(&str, KeywordDoc)] = &[
     ("dynamic", KeywordDoc {
         description: "Marks this entry as only resolvable at runtime, not through compile-time codegen assumptions.",
         example: "dynamic = true",
+    }),
+    ("paint", KeywordDoc {
+        description: "Default color for an SVG's `currentColor`: `#rgb`/`#rrggbb`, or `none` to cancel an inherited one. Nearest wins: entry, enclosing table, provider, `[defaults]`.",
+        example: "[providers.tabler.override]\npaint = \"#1e1e1e\"\n\n[logo]\nfile = \"logo.svg\"\npaint = \"none\"",
     }),
 ];
 

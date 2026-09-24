@@ -17,7 +17,11 @@ mod tests {
             variant: variant.map(str::to_string),
             size,
             dynamic: false,
-            backend: MaterializedIconBackend::Image { path: Path::new("unused.svg").to_path_buf(), kind: ImageKind::Svg },
+            backend: MaterializedIconBackend::Image {
+                path: Path::new("unused.svg").to_path_buf(),
+                kind: ImageKind::Svg,
+                paint: None,
+            },
         }
     }
 

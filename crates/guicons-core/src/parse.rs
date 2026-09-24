@@ -5,15 +5,15 @@
 //! `toml_span::parse` and validates/extracts entries from it.
 
 use crate::diagnostics::Diagnostics;
-use crate::model::{IconEntry, IconEntrySource, IconManifest, ManifestDefaults, ProviderSchema};
+use crate::model::{IconEntry, IconEntrySource, IconManifest, ManifestDefaults, Paint, ProviderSchema};
 use crate::paths::resolve_workspace_path;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use toml_span::de_helpers::TableHelper;
 use toml_span::value::{Table, Value, ValueInner};
-use toml_span::Span;
+use toml_span::{Span, Spanned};
 
-const ENTRY_KEYS: &[&str] = &[
+pub(crate) const ENTRY_KEYS: &[&str] = &[
     "file",
     "iconify",
     "url",
@@ -31,6 +31,29 @@ fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
     }
 }
 
+fn take_paint(table: &mut Table<'_>, diags: &mut Diagnostics) -> Option<Paint> {
+    let mut value = table.remove("paint")?;
+    let span = value.span;
+    match value.take() {
+        ValueInner::String(text) => parse_paint(Spanned { value: text.into_owned(), span }, diags),
+        _ => {
+            diags.error(Some(span.into()), "`paint` must be a string");
+            None
+        }
+    }
+}
+
+fn parse_paint(value: Spanned<String>, diags: &mut Diagnostics) -> Option<Paint> {
+    Paint::parse(&value.value)
+        .map_err(|message| diags.error(Some(value.span.into()), message))
+        .ok()
+}
+
+/// `Err` once the error is reported, so the caller can drop the whole table.
+fn parse_optional_paint(value: Option<Spanned<String>>, diags: &mut Diagnostics) -> Result<Option<Paint>, ()> {
+    value.map(|value| parse_paint(value, diags).ok_or(())).transpose()
+}
+
 fn split_family_and_size(path: &[String]) -> (String, Option<u16>) {
     if let Some((last, rest)) = path.split_last() {
         if let Ok(size) = last.parse::<u16>() {
@@ -46,6 +69,7 @@ pub(crate) fn collect_entries(
     workspace_root: &Path,
     defaults: &ManifestDefaults,
     providers: &HashMap<String, ProviderSchema>,
+    inherited_paint: Option<Paint>,
     diags: &mut Diagnostics,
     acc: &mut Vec<IconEntry>,
 ) {
@@ -71,6 +95,7 @@ pub(crate) fn collect_entries(
     }
 
     if let Some(mut variants_value) = table.remove("variants") {
+        let inherited_paint = take_paint(&mut table, diags).or(inherited_paint);
         let key_prefix = path.join("-");
         let (family, explicit_size) = split_family_and_size(&path);
         let variants_span = variants_value.span;
@@ -97,6 +122,7 @@ pub(crate) fn collect_entries(
                         defaults,
                         providers,
                         explicit_size,
+                        inherited_paint,
                         diags,
                     ) {
                         acc.push(entry);
@@ -128,12 +154,19 @@ pub(crate) fn collect_entries(
             defaults,
             providers,
             explicit_size,
+            inherited_paint,
             diags,
         ) {
             acc.push(entry);
         }
         return;
     }
+
+    let inherited_paint = if path.is_empty() {
+        inherited_paint
+    } else {
+        take_paint(&mut table, diags).or(inherited_paint)
+    };
 
     for (key, mut value) in table {
         let key_name = key.name.to_string();
@@ -150,7 +183,7 @@ pub(crate) fn collect_entries(
         };
         let mut next_path = path.clone();
         next_path.push(key_name);
-        collect_entries(next_path, sub_table, workspace_root, defaults, providers, diags, acc);
+        collect_entries(next_path, sub_table, workspace_root, defaults, providers, inherited_paint, diags, acc);
     }
 }
 
@@ -184,6 +217,7 @@ fn parse_entry(
     defaults: &ManifestDefaults,
     providers: &HashMap<String, ProviderSchema>,
     explicit_size: Option<u16>,
+    inherited_paint: Option<Paint>,
     diags: &mut Diagnostics,
 ) -> Option<IconEntry> {
     let mut th = TableHelper::from((table, table_span));
@@ -200,11 +234,15 @@ fn parse_entry(
     let glyph: Option<String> = th.optional("glyph");
     let windows_ico: Option<String> = th.optional("windows-ico");
     let dynamic: bool = th.optional("dynamic").unwrap_or(false);
+    let own_paint: Option<Spanned<String>> = th.optional_s("paint");
 
     if let Err(err) = th.finalize(None) {
         diags.push_deser_error(err);
         return None;
     }
+
+    let own_paint_span = own_paint.as_ref().map(|paint| paint.span);
+    let own_paint = parse_optional_paint(own_paint, diags).ok()?;
 
     let roots: Vec<PathBuf> = root
         .map(|value| vec![resolve_workspace_path(workspace_root, &value)])
@@ -311,6 +349,35 @@ fn parse_entry(
         }
     }
 
+    let paintable = match &source {
+        IconEntrySource::File(path) => !is_png(path),
+        IconEntrySource::Iconify(_) | IconEntrySource::Url(_) => true,
+        IconEntrySource::Glyph(_) => false,
+    };
+    let paint = if paintable {
+        let provider_paint = match &source {
+            IconEntrySource::Iconify(id) => id
+                .split_once(':')
+                .and_then(|(provider, _)| providers.get(provider))
+                .and_then(|schema| schema.paint),
+            _ => None,
+        };
+        own_paint
+            .or(inherited_paint)
+            .or(provider_paint)
+            .or(defaults.paint)
+            .and_then(Paint::color)
+    } else {
+        if let (Some(Paint::Color(_)), Some(span)) = (own_paint, own_paint_span) {
+            diags.error(
+                Some(span.into()),
+                format!("icon manifest entry `{key}` can't be painted: `paint` only recolors SVG icons"),
+            );
+            return None;
+        }
+        None
+    };
+
     let windows_ico = windows_ico.map(|value| resolve_file_from_roots(&roots, &value));
 
     Some(IconEntry {
@@ -321,6 +388,7 @@ fn parse_entry(
         source,
         dynamic,
         windows_ico,
+        paint,
         span: table_span.into(),
         // Filled in by `load`, which is the only layer that knows which
         // file's table tree is currently being walked.
@@ -356,9 +424,11 @@ pub(crate) fn parse_defaults(
     let roots_field: Option<Vec<String>> = th.optional("roots");
     let provider: Option<String> = th.optional("provider");
     let size: Option<u16> = th.optional("size");
+    let paint: Option<Spanned<String>> = th.optional_s("paint");
     if let Err(err) = th.finalize(None) {
         diags.push_deser_error(err);
     }
+    let paint = paint.and_then(|value| parse_paint(value, diags));
 
     let mut roots = Vec::new();
     if let Some(value) = root {
@@ -375,6 +445,7 @@ pub(crate) fn parse_defaults(
         roots,
         provider,
         size,
+        paint,
     }
 }
 
@@ -384,7 +455,12 @@ pub(crate) fn parse_defaults(
 /// shape the TOML was in.
 pub(crate) enum ProviderDeclaration {
     Full { schema: ProviderSchema, span: toml_span::Span },
-    Override { variants: Option<Vec<String>>, sizes: Option<Vec<u16>>, span: toml_span::Span },
+    Override {
+        variants: Option<Vec<String>>,
+        sizes: Option<Vec<u16>>,
+        paint: Option<Paint>,
+        span: toml_span::Span,
+    },
 }
 
 pub(crate) fn parse_providers(
@@ -431,22 +507,30 @@ pub(crate) fn parse_providers(
             let mut th = TableHelper::from((override_table, override_span));
             let variants: Option<Vec<String>> = th.optional("variants");
             let sizes: Option<Vec<u16>> = th.optional("sizes");
+            let paint: Option<Spanned<String>> = th.optional_s("paint");
             if let Err(err) = th.finalize(None) {
                 diags.push_deser_error(err);
                 continue;
             }
+            let Ok(paint) = parse_optional_paint(paint, diags) else {
+                continue;
+            };
 
-            providers.insert(name, ProviderDeclaration::Override { variants, sizes, span: entry_span });
+            providers.insert(name, ProviderDeclaration::Override { variants, sizes, paint, span: entry_span });
             continue;
         }
 
         let mut th = TableHelper::from((entry_table, entry_span));
         let variants: Option<Vec<String>> = th.optional("variants");
         let sizes: Option<Vec<u16>> = th.optional("sizes");
+        let paint: Option<Spanned<String>> = th.optional_s("paint");
         if let Err(err) = th.finalize(None) {
             diags.push_deser_error(err);
             continue;
         }
+        let Ok(paint) = parse_optional_paint(paint, diags) else {
+            continue;
+        };
 
         providers.insert(
             name,
@@ -454,6 +538,7 @@ pub(crate) fn parse_providers(
                 schema: ProviderSchema {
                     variants: variants.unwrap_or_default(),
                     sizes: sizes.unwrap_or_default(),
+                    paint,
                 },
                 span: entry_span,
             },
@@ -517,13 +602,14 @@ pub(crate) fn resolve_providers(
                 }
                 resolved.insert(name, schema);
             }
-            ProviderDeclaration::Override { variants, sizes, span } => match builtin.get(&name) {
+            ProviderDeclaration::Override { variants, sizes, paint, span } => match builtin.get(&name) {
                 Some(base) => {
                     resolved.insert(
                         name,
                         ProviderSchema {
                             variants: variants.unwrap_or_else(|| base.variants.clone()),
                             sizes: sizes.unwrap_or_else(|| base.sizes.clone()),
+                            paint: paint.or(base.paint),
                         },
                     );
                 }
@@ -669,6 +755,10 @@ pub fn parse_glyph_spec(spec: &str, context: &str) -> (String, char) {
     try_parse_glyph_spec(spec).unwrap_or_else(|message| panic!("Glyph manifest entry `{context}` {message}"))
 }
 
+fn is_png(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "png")
+}
+
 pub(crate) fn resolve_file_from_roots(roots: &[PathBuf], value: &str) -> PathBuf {
     let path = Path::new(value);
     if path.is_absolute() {
@@ -718,7 +808,7 @@ mod tests {
                 file: Path::new("test.gui.toml"),
                 errors: &mut errors,
             };
-            collect_entries(Vec::new(), table, &workspace_root(), &defaults, &providers, &mut diags, &mut entries);
+            collect_entries(Vec::new(), table, &workspace_root(), &defaults, &providers, None, &mut diags, &mut entries);
         }
         (entries, errors.into_iter().map(|e| e.message).collect())
     }
@@ -1003,6 +1093,178 @@ mod tests {
         insta::assert_debug_snapshot!(errors);
     }
 
+    fn paints_for(toml: &str) -> (Vec<(String, Option<String>)>, Vec<String>) {
+        let (manifest, errors) =
+            crate::load_icon_manifest_from_str(Path::new("/workspace/icons.gui.toml"), toml);
+        let paints = manifest
+            .entries()
+            .iter()
+            .map(|entry| (entry.key().to_string(), entry.paint().map(crate::PaintColor::to_hex)))
+            .collect();
+        (paints, errors.into_iter().map(|e| e.message).collect())
+    }
+
+    fn paint_of<'a>(paints: &'a [(String, Option<String>)], key: &str) -> Option<&'a str> {
+        paints
+            .iter()
+            .find(|(entry, _)| entry == key)
+            .unwrap_or_else(|| panic!("no entry `{key}` in {paints:?}"))
+            .1
+            .as_deref()
+    }
+
+    #[test]
+    fn paint_resolves_nearest_declaration_first() {
+        let (paints, errors) = paints_for(
+            r##"
+            [defaults]
+            paint = "#111111"
+
+            [providers.acme]
+            paint = "#222222"
+
+            [providers.tabler.override]
+            paint = "#333333"
+
+            [plain]
+            iconify = "mdi:home"
+
+            [from-provider]
+            iconify = "acme:gear"
+
+            [from-builtin-override]
+            iconify = "tabler:clock"
+
+            [group]
+            paint = "#444444"
+
+            [group.inner]
+            iconify = "acme:gear"
+
+            [family]
+            paint = "#555555"
+            variants.a = { iconify = "acme:a" }
+            variants.b = { iconify = "acme:b", paint = "#666" }
+            "##,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(paint_of(&paints, "plain"), Some("#111111"));
+        assert_eq!(paint_of(&paints, "from-provider"), Some("#222222"));
+        assert_eq!(paint_of(&paints, "from-builtin-override"), Some("#333333"));
+        assert_eq!(paint_of(&paints, "group-inner"), Some("#444444"));
+        assert_eq!(paint_of(&paints, "family-a"), Some("#555555"));
+        assert_eq!(paint_of(&paints, "family-b"), Some("#666666"));
+    }
+
+    #[test]
+    fn paint_none_cancels_what_comes_from_above() {
+        let (paints, errors) = paints_for(
+            r##"
+            [defaults]
+            paint = "#111111"
+
+            [providers.logos]
+            paint = "none"
+
+            [ubuntu]
+            iconify = "logos:ubuntu"
+
+            [docker]
+            iconify = "mdi:docker"
+            paint = "none"
+            "##,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(paint_of(&paints, "ubuntu"), None);
+        assert_eq!(paint_of(&paints, "docker"), None);
+    }
+
+    #[test]
+    fn nothing_declared_means_no_paint() {
+        let (paints, errors) = paints_for(
+            r#"
+            [home]
+            iconify = "mdi:home"
+            "#,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(paint_of(&paints, "home"), None);
+    }
+
+    #[test]
+    fn inherited_paint_skips_what_cant_be_painted() {
+        let (paints, errors) = paints_for(
+            r##"
+            [defaults]
+            paint = "#111111"
+
+            [photo]
+            file = "photo.png"
+
+            [spinner]
+            glyph = "Icons:U+E001"
+            "##,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(paint_of(&paints, "photo"), None);
+        assert_eq!(paint_of(&paints, "spinner"), None);
+    }
+
+    #[test]
+    fn explicit_paint_on_a_glyph_is_an_error() {
+        let (paints, errors) = paints_for(
+            r##"
+            [spinner]
+            glyph = "Icons:U+E001"
+            paint = "#111111"
+            "##,
+        );
+        assert!(paints.is_empty());
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn malformed_paint_is_an_error() {
+        let (_, errors) = paints_for(
+            r##"
+            [defaults]
+            paint = "red"
+
+            [home]
+            iconify = "mdi:home"
+            paint = "#12345"
+            "##,
+        );
+        insta::assert_debug_snapshot!(errors);
+    }
+
+    #[test]
+    fn paint_color_parses_short_and_long_hex() {
+        use crate::{Paint, PaintColor};
+        assert_eq!(Paint::parse("none"), Ok(Paint::None));
+        assert_eq!(PaintColor::parse("#fA0").map(PaintColor::to_hex), Ok("#ffaa00".to_string()));
+        assert_eq!(PaintColor::parse("#1a2B3c").map(PaintColor::to_hex), Ok("#1a2b3c".to_string()));
+        for bad in ["", "#", "fff", "#ffff", "#ggg", "#+1+2+3"] {
+            assert!(PaintColor::parse(bad).is_err(), "`{bad}` should be rejected");
+        }
+    }
+
+    #[test]
+    fn current_color_is_found_in_any_case() {
+        assert!(crate::svg_uses_current_color(br#"<path fill="currentColor"/>"#));
+        assert!(crate::svg_uses_current_color(b"<path style=\"fill:currentcolor\"/>"));
+        assert!(!crate::svg_uses_current_color(br##"<path fill="#fff"/>"##));
+    }
+
+    #[test]
+    fn paint_svg_replaces_every_current_color() {
+        let color = crate::PaintColor { r: 0x12, g: 0xab, b: 0xff };
+        assert_eq!(
+            crate::paint_svg(b"<path stroke=\"currentColor\" style=\"fill:currentcolor\"/>", color),
+            b"<path stroke=\"#12abff\" style=\"fill:#12abff\"/>"
+        );
+    }
+
     fn providers_for(toml: &str) -> (HashMap<String, ProviderSchema>, Vec<String>) {
         let mut root = toml_span::parse(toml).expect("valid toml");
         let mut table = take_table(&mut root).expect("root must be a table");
@@ -1023,6 +1285,7 @@ mod tests {
         ProviderSchema {
             variants: variants.iter().map(|v| v.to_string()).collect(),
             sizes: sizes.to_vec(),
+            paint: None,
         }
     }
 
@@ -1033,6 +1296,7 @@ mod tests {
             source_paths: Vec::new(),
             entries: Vec::new(),
             providers,
+            default_paint: None,
         }
     }
 
@@ -1220,7 +1484,7 @@ mod tests {
                 prop::collection::vec("[a-z]{2,6}", 0..4),
                 prop::collection::vec(1u16..100, 0..4),
             )
-                .prop_map(|(variants, sizes)| ProviderSchema { variants, sizes })
+                .prop_map(|(variants, sizes)| ProviderSchema { variants, sizes, paint: None })
         }
 
         proptest! {

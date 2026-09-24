@@ -3,5 +3,5 @@ source: crates/guicons-core/src/parse.rs
 expression: errors
 ---
 [
-    "unexpected field(s): `bogus` (expected one of: `root`, `file`, `iconify`, `url`, `glyph`, `windows-ico`, `dynamic`)",
+    "unexpected field(s): `bogus` (expected one of: `root`, `file`, `iconify`, `url`, `glyph`, `windows-ico`, `dynamic`, `paint`)",
 ]

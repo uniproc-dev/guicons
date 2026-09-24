@@ -40,6 +40,7 @@ pub struct IconBuild {
     emit_slint: bool,
     slint_image_resolver: bool,
     windows_reactor_image_resolver: bool,
+    egui_image_resolver: bool,
 }
 
 impl IconBuild {
@@ -53,6 +54,7 @@ impl IconBuild {
             emit_slint: false,
             slint_image_resolver: false,
             windows_reactor_image_resolver: false,
+            egui_image_resolver: false,
         }
     }
 
@@ -83,6 +85,11 @@ impl IconBuild {
         self
     }
 
+    pub fn with_egui_image_resolver(mut self) -> Self {
+        self.egui_image_resolver = true;
+        self
+    }
+
     pub fn build(self) {
         let manifest = load_icon_manifest(&self.manifest_path);
         let icons = materialize_icons(&manifest, &self.materialized_root);
@@ -95,6 +102,7 @@ impl IconBuild {
                 &icons,
                 self.slint_image_resolver,
                 self.windows_reactor_image_resolver,
+                self.egui_image_resolver,
             );
         }
 

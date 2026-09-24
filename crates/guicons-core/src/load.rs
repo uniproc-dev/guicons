@@ -119,6 +119,7 @@ fn empty_manifest(manifest_path: &Path, source_paths: &[std::path::PathBuf]) -> 
         source_paths: source_paths.to_vec(),
         entries: Vec::new(),
         providers: std::collections::HashMap::new(),
+        default_paint: None,
     }
 }
 
@@ -189,7 +190,7 @@ fn compile(
     let own_entries_start = entries.len();
     {
         let mut diags = Diagnostics { file: manifest_path, errors };
-        collect_entries(Vec::new(), root_table, &workspace_root, &defaults, &providers, &mut diags, &mut entries);
+        collect_entries(Vec::new(), root_table, &workspace_root, &defaults, &providers, None, &mut diags, &mut entries);
     }
     // `collect_entries` doesn't know which file it's parsing (that's the
     // whole point of the parse/load split) - entries from `[link]`d
@@ -208,5 +209,6 @@ fn compile(
         source_paths: source_paths.to_vec(),
         entries,
         providers,
+        default_paint: defaults.paint,
     }
 }

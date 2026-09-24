@@ -1,5 +1,5 @@
 use super::paths::canonicalize_existing;
-use guicons_core::{IconEntrySource, IconManifest};
+use guicons_core::{IconEntry, IconEntrySource, IconManifest, PaintColor};
 use guicons_net::{ensure_cached, iconify_cache_path, iconify_url, url_cache_path};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,8 +16,16 @@ pub(crate) struct MaterializedIcon {
 
 #[derive(Clone, Debug)]
 pub(crate) enum MaterializedIconBackend {
-    Image { path: PathBuf, kind: ImageKind },
+    /// `path` is already drawn in the declared `paint`, if any.
+    Image { path: PathBuf, kind: ImageKind, paint: Option<MaterializedPaint> },
     Glyph { font_family: String, codepoint: char },
+}
+
+/// The unpainted SVG, kept so the color can change at runtime.
+#[derive(Clone, Debug)]
+pub(crate) struct MaterializedPaint {
+    pub(crate) template: PathBuf,
+    pub(crate) color: PaintColor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,31 +55,19 @@ pub(crate) fn materialize_icons(manifest: &IconManifest, build_out_dir: &Path) -
                 IconEntrySource::File(path) => {
                     let output_path =
                         icons_dir.join(format!("{}.{}", output_stem(entry.key()), image_ext(path)));
-                    copy_if_changed(&canonicalize_existing(path), &output_path);
-                    MaterializedIconBackend::Image {
-                        kind: image_kind(&output_path),
-                        path: output_path,
-                    }
+                    materialize_image(entry, &canonicalize_existing(path), output_path, &icons_dir)
                 }
                 IconEntrySource::Iconify(id) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
                     let cached = iconify_cache_path(manifest.workspace_root(), id);
                     ensure_cached(&cached, &iconify_url(id));
-                    copy_if_changed(&cached, &output_path);
-                    MaterializedIconBackend::Image {
-                        kind: ImageKind::Svg,
-                        path: output_path,
-                    }
+                    materialize_image(entry, &cached, output_path, &icons_dir)
                 }
                 IconEntrySource::Url(url) => {
                     let output_path = icons_dir.join(format!("{}.svg", output_stem(entry.key())));
                     let cached = url_cache_path(manifest.workspace_root(), url);
                     ensure_cached(&cached, url);
-                    copy_if_changed(&cached, &output_path);
-                    MaterializedIconBackend::Image {
-                        kind: ImageKind::Svg,
-                        path: output_path,
-                    }
+                    materialize_image(entry, &cached, output_path, &icons_dir)
                 }
                 IconEntrySource::Glyph(glyph) => {
                     let (font_family, codepoint) = guicons_core::parse_glyph_spec(glyph, entry.key());
@@ -98,15 +94,38 @@ pub(crate) fn output_stem(key: &str) -> String {
     key.replace(['.', '_'], "-")
 }
 
-fn copy_if_changed(src: &Path, dest: &Path) {
-    let src_bytes =
-        fs::read(src).unwrap_or_else(|e| panic!("Failed to read {}: {e}", src.display()));
+fn materialize_image(entry: &IconEntry, source: &Path, output_path: PathBuf, icons_dir: &Path) -> MaterializedIconBackend {
+    let bytes = read(source);
+    let kind = image_kind(&output_path);
+    let Some(color) = entry.paint() else {
+        write_if_changed(&output_path, &bytes);
+        return MaterializedIconBackend::Image { path: output_path, kind, paint: None };
+    };
+    if !guicons_core::svg_uses_current_color(&bytes) {
+        panic!(
+            "icon `{}` is declared with `paint = \"{}\"`, but {} has no `currentColor` to paint; declare `paint = \"none\"` for it",
+            entry.key(),
+            color.to_hex(),
+            source.display()
+        );
+    }
+    let template = icons_dir.join(format!("{}.template.svg", output_stem(entry.key())));
+    write_if_changed(&template, &bytes);
+    write_if_changed(&output_path, &guicons_core::paint_svg(&bytes, color));
+    MaterializedIconBackend::Image { path: output_path, kind, paint: Some(MaterializedPaint { template, color }) }
+}
+
+fn read(path: &Path) -> Vec<u8> {
+    fs::read(path).unwrap_or_else(|e| panic!("Failed to read {}: {e}", path.display()))
+}
+
+fn write_if_changed(dest: &Path, bytes: &[u8]) {
     let existing = fs::read(dest).unwrap_or_default();
-    if existing != src_bytes {
+    if existing != bytes {
         if let Some(parent) = dest.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        fs::write(dest, src_bytes)
+        fs::write(dest, bytes)
             .unwrap_or_else(|e| panic!("Failed to write {}: {e}", dest.display()));
     }
 }
@@ -122,5 +141,61 @@ fn image_kind(path: &Path) -> ImageKind {
     match image_ext(path) {
         "png" => ImageKind::Png,
         _ => ImageKind::Svg,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEMPLATE: &str = r#"<svg><path fill="currentColor"/></svg>"#;
+
+    fn materialize(manifest: &str, files: &[(&str, &str)]) -> (tempfile::TempDir, Vec<MaterializedIcon>) {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, content) in files {
+            fs::write(dir.path().join(name), content).unwrap();
+        }
+        let manifest_path = dir.path().join("icons.gui.toml");
+        fs::write(&manifest_path, manifest).unwrap();
+        let (manifest, errors) = guicons_core::load_icon_manifest(&manifest_path);
+        assert!(errors.is_empty(), "{errors:?}");
+        let icons = materialize_icons(&manifest, &dir.path().join("out"));
+        (dir, icons)
+    }
+
+    fn backend<'a>(icons: &'a [MaterializedIcon], key: &str) -> &'a MaterializedIconBackend {
+        &icons.iter().find(|icon| icon.key == key).unwrap().backend
+    }
+
+    #[test]
+    fn painted_icon_keeps_its_template_and_ships_the_declared_color() {
+        let (_dir, icons) = materialize(
+            "[defaults]\npaint = \"#123456\"\n\n[gear]\nfile = \"gear.svg\"\n",
+            &[("gear.svg", TEMPLATE)],
+        );
+        let MaterializedIconBackend::Image { path, paint: Some(paint), .. } = backend(&icons, "gear") else {
+            panic!("gear should be painted");
+        };
+        assert_eq!(fs::read_to_string(path).unwrap(), r##"<svg><path fill="#123456"/></svg>"##);
+        assert_eq!(fs::read_to_string(&paint.template).unwrap(), TEMPLATE);
+        assert_eq!(paint.color.to_hex(), "#123456");
+    }
+
+    #[test]
+    fn unpainted_icon_is_copied_as_is() {
+        let (_dir, icons) = materialize("[gear]\nfile = \"gear.svg\"\n", &[("gear.svg", TEMPLATE)]);
+        let MaterializedIconBackend::Image { path, paint: None, .. } = backend(&icons, "gear") else {
+            panic!("gear should not be painted");
+        };
+        assert_eq!(fs::read_to_string(path).unwrap(), TEMPLATE);
+    }
+
+    #[test]
+    #[should_panic(expected = "has no `currentColor` to paint")]
+    fn paint_on_an_svg_without_current_color_fails_the_build() {
+        materialize(
+            "[defaults]\npaint = \"#123456\"\n\n[logo]\nfile = \"logo.svg\"\n",
+            &[("logo.svg", r##"<svg><path fill="#e95420"/></svg>"##)],
+        );
     }
 }

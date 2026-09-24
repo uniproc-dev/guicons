@@ -30,7 +30,7 @@ typed, checked operation instead of a bare file path.
   component.
 - **`guicons::icon!`**: resolves a selector against your manifest at
   compile time straight into your active GUI framework's native type
-  (`slint::Image`, an iced `Handle`).
+  (`slint::Image`, an iced `Handle`, an egui `ImageSource`).
 - **Slint integration out of the box**, with a runnable example in
   `crates/guicons/examples/`.
 - **CLI** (`guicons-cli`): `icons fetch`/`update` populates the
@@ -99,8 +99,8 @@ guicons::include_icons!();
 Most of the time you just want to hand an icon straight to your GUI
 framework - `guicons::icon!` resolves a selector, checked against your
 manifest at compile time, directly to whichever framework's native type
-matches your enabled feature (`slint` or `iced`; plain `IconData` if
-neither is enabled):
+matches your enabled feature (`slint`, `iced`, `windows-reactor` or `egui`;
+plain `IconData` if none is enabled):
 
 ```rust
 // with the `slint` feature enabled, this is already a `slint::Image`
@@ -112,6 +112,33 @@ regardless of which GUI feature is enabled.
 
 Use `guicons` normally at runtime, and add `guicons-build` as a
 `build-dependencies` entry when generating code from `build.rs`.
+
+### Icon color
+
+`paint` sets the color an SVG's `currentColor` is drawn in. The nearest
+declaration wins: the entry, its enclosing tables, its iconify provider,
+then `[defaults]`. `"none"` cancels what comes from above.
+
+```toml
+[defaults]
+paint = "#1a1a1a"
+
+[providers.logos]
+paint = "none"
+
+[prohibited]
+iconify = "fluent:prohibited-24-regular"
+paint = "#c42b1c"
+```
+
+The declared color is a default; pass the app's own at the call site:
+
+```rust
+guicons::icon!(settings.filled, color = theme.foreground)
+```
+
+A painted SVG without `currentColor`, or `color = ...` on an icon without
+`paint`, is a compile error.
 
 ### Dynamic/runtime lookups
 
@@ -158,4 +185,14 @@ for a complete, runnable example (`cargo run -p guicons --example slint_icon --f
 directly from `IconData`/`IconSource`, plus the same glyph pair for
 font-based icons. See [`examples/iced_icon.rs`](crates/guicons/examples/iced_icon.rs)
 for a complete, runnable example (`cargo run -p guicons --example iced_icon --features iced`).
+
+### egui (`egui` feature)
+
+`icon!` yields an `egui::ImageSource`. Install image loaders
+(`egui_extras` with the `svg` feature):
+
+```rust
+egui_extras::install_image_loaders(&ctx);
+ui.add(egui::Image::new(guicons::icon!("mdi:home")).fit_to_exact_size(egui::vec2(24.0, 24.0)));
+```
 

@@ -1,6 +1,7 @@
 use crate::iconify_completion::{self, IconifyContext};
 use crate::manifest_text::{
-    defaults_root, iconify_field_at, path_field_at, section_kind_at, word_prefix_span, PathFieldKind, SectionKind,
+    defaults_root, iconify_field_at, inline_table_key_at, paint_field_at, path_field_at, section_kind_at,
+    word_prefix_span, PathFieldKind, SectionKind,
 };
 use crate::position::LineIndex;
 use crate::Backend;
@@ -142,6 +143,27 @@ impl Backend {
             return Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })));
         }
 
+        if let Some((quote_span, typed)) = paint_field_at(&text, offset) {
+            let range = index.range(&text, quote_span);
+            let items = ["none"]
+                .into_iter()
+                .filter(|value| value.starts_with(&typed))
+                .map(|value| CompletionItem {
+                    label: value.to_string(),
+                    detail: Some("paint".to_string()),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text: value.to_string() })),
+                    ..Default::default()
+                })
+                .collect();
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
+        if inline_table_key_at(&text, offset) {
+            let fields = ["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "paint"];
+            let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
         if line_prefix.starts_with("variants.") {
             let (manifest, _) = guicons_core::load_icon_manifest_from_str(&path, &text);
             let mut variants = BTreeSet::new();
@@ -160,10 +182,10 @@ impl Backend {
         if is_bare_key_prefix {
             let fields: &[&str] = match section_kind_at(&text, offset) {
                 SectionKind::TopLevel => &["defaults", "link", "providers"],
-                SectionKind::Defaults => &["root", "provider", "size"],
+                SectionKind::Defaults => &["root", "provider", "size", "paint"],
                 SectionKind::Link => &["includes"],
-                SectionKind::Provider => &["variants", "sizes"],
-                SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "variants"],
+                SectionKind::Provider => &["variants", "sizes", "paint"],
+                SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "paint", "variants"],
             };
             let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
             return Ok(Some(CompletionResponse::Array(items)));

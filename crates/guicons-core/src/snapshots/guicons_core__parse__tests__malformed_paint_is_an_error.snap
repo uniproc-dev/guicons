@@ -1,0 +1,8 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`paint` must be `none` or a `#rgb`/`#rrggbb` color, got `red`",
+    "`paint` must be `none` or a `#rgb`/`#rrggbb` color, got `#12345`",
+]

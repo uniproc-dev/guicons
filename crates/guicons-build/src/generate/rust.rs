@@ -1,5 +1,5 @@
 use super::shared::write_if_changed;
-use crate::materialize::{ImageKind, MaterializedIcon, MaterializedIconBackend};
+use crate::materialize::{ImageKind, MaterializedIcon, MaterializedIconBackend, MaterializedPaint};
 use guicons_core::{rust_const_name, rust_fn_name, rust_variant_name};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,6 +10,7 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
     icons: &[MaterializedIcon],
     slint_image_resolver: bool,
     windows_reactor_image_resolver: bool,
+    egui_image_resolver: bool,
 ) {
     let key_consts = icons
         .iter()
@@ -85,7 +86,17 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
     let data_arms = icons
         .iter()
         .map(|icon| match &icon.backend {
-            MaterializedIconBackend::Image { path, kind } if !icon.dynamic => {
+            MaterializedIconBackend::Image { paint: Some(MaterializedPaint { template, color }), .. } if !icon.dynamic => {
+                let template = template.to_string_lossy().replace('\\', "\\\\");
+                format!(
+                    "        keys::{} => Some(IconData::PaintedSvg {{ template: include_bytes!(\"{template}\"), color: guicons::Color::rgb({}, {}, {}) }}),",
+                    rust_const_name(&icon.key),
+                    color.r,
+                    color.g,
+                    color.b
+                )
+            }
+            MaterializedIconBackend::Image { path, kind, .. } if !icon.dynamic => {
                 let path = path.to_string_lossy().replace('\\', "\\\\");
                 let ctor = match kind {
                     ImageKind::Svg => "Svg",
@@ -131,6 +142,12 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
 
     let windows_reactor_resolver = if windows_reactor_image_resolver {
         "\npub fn resolve_image<'a>(icon: impl Into<IconRef<'a>>) -> windows_reactor::Image {\n    resolve_path(icon).map(guicons::windows_reactor::image_from_path).unwrap_or_default()\n}\n"
+    } else {
+        ""
+    };
+
+    let egui_resolver = if egui_image_resolver {
+        "\npub fn resolve_image_source<'a>(icon: impl Into<IconRef<'a>>) -> Option<egui::ImageSource<'static>> {\n    resolve(icon).and_then(guicons::egui::image_source_from_data)\n}\n"
     } else {
         ""
     };
@@ -218,7 +235,7 @@ pub fn path_for(key: IconKey) -> Option<&'static str> {{
 pub fn resolve_path<'a>(icon: impl Into<IconRef<'a>>) -> Option<&'static str> {{
     key_from_ref(icon.into()).and_then(path_for)
 }}
-{slint_resolver}{windows_reactor_resolver}"#,
+{slint_resolver}{windows_reactor_resolver}{egui_resolver}"#,
         manifest_file_name(manifest_path)
     );
 

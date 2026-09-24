@@ -57,6 +57,49 @@ fn seed_global_iconify_cache(dir: &Path) -> std::sync::MutexGuard<'static, ()> {
     guard
 }
 
+async fn open(service: &mut LspService<Backend>, uri: &Url, language_id: &str, text: &str) {
+    call(
+        service,
+        "textDocument/didOpen",
+        Some(json!({
+            "textDocument": { "uri": uri, "languageId": language_id, "version": 1, "text": text }
+        })),
+        None,
+    )
+    .await;
+}
+
+async fn completion_labels(service: &mut LspService<Backend>, uri: &Url, line: usize, character: usize) -> Vec<String> {
+    let result = call(
+        service,
+        "textDocument/completion",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("completion response");
+    let items = result.as_array().or_else(|| result["items"].as_array()).expect("completion items");
+    items.iter().map(|item| item["label"].as_str().unwrap().to_string()).collect()
+}
+
+async fn hover_value(service: &mut LspService<Backend>, uri: &Url, line: usize, character: usize) -> String {
+    let result = call(
+        service,
+        "textDocument/hover",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        })),
+        Some(2),
+    )
+    .await
+    .expect("hover response");
+    result["contents"]["value"].as_str().unwrap().to_string()
+}
+
 #[tokio::test]
 async fn diagnostics_reported_for_invalid_manifest_content_on_open() {
     let dir = tempdir().unwrap();
@@ -1377,4 +1420,164 @@ async fn rename_on_a_manifest_entry_edits_every_header_and_call_site() {
 
     let other_crate_rs_uri = file_uri(&other_crate.join("main.rs"));
     assert!(!changes.contains_key(other_crate_rs_uri.as_str()), "must not touch the unrelated crate's own docker family");
+}
+
+#[tokio::test]
+async fn initialize_advertises_the_color_provider() {
+    let (mut service, _socket) = guicons_lsp::service();
+    let result = call(&mut service, "initialize", Some(json!({ "capabilities": {} })), Some(1))
+        .await
+        .expect("initialize response");
+
+    assert_eq!(result["capabilities"]["colorProvider"], true, "{result}");
+}
+
+#[tokio::test]
+async fn completion_offers_paint_in_entry_group_defaults_and_provider_tables() {
+    let dir = tempdir().unwrap();
+    let content = "[defaults]\n\n[providers.acme]\n\n[providers.tabler.override]\n\n[nav]\n\n[nav.back]\n\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    for line in [1, 3, 5, 7, 9] {
+        let labels = completion_labels(&mut service, &uri, line, 0).await;
+        assert!(labels.iter().any(|label| label == "paint"), "line {line}: {labels:?}");
+    }
+}
+
+#[tokio::test]
+async fn completion_inside_an_inline_variant_table_lists_entry_fields() {
+    let dir = tempdir().unwrap();
+    let content = "[settings]\nvariants.filled = { file = \"settings-filled.svg\", pa }\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let line = content.lines().nth(1).unwrap();
+    let character = line.find("pa }").unwrap() + 2;
+    let labels = completion_labels(&mut service, &uri, 1, character).await;
+
+    assert!(labels.iter().any(|label| label == "paint"), "{labels:?}");
+    assert!(labels.iter().any(|label| label == "iconify"), "{labels:?}");
+    assert!(!labels.iter().any(|label| label == "variants"), "{labels:?}");
+}
+
+#[tokio::test]
+async fn completion_inside_a_paint_value_offers_none() {
+    let dir = tempdir().unwrap();
+    let content = "[settings]\nvariants.filled = { iconify = \"mdi:cog\", paint = \"\" }\n\n[home]\niconify = \"mdi:home\"\npaint = \"n\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let inline_line = content.lines().nth(1).unwrap();
+    let inline_character = inline_line.find("paint = \"").unwrap() + "paint = \"".len();
+    let inline_labels = completion_labels(&mut service, &uri, 1, inline_character).await;
+    assert_eq!(inline_labels, vec!["none"]);
+
+    let labels = completion_labels(&mut service, &uri, 5, "paint = \"n".len()).await;
+    assert_eq!(labels, vec!["none"]);
+}
+
+#[tokio::test]
+async fn hover_on_the_paint_keyword_shows_docs() {
+    let dir = tempdir().unwrap();
+    let content = "[home]\niconify = \"mdi:home\"\npaint = \"#fff\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let value = hover_value(&mut service, &uri, 2, 1).await;
+    assert!(value.contains("**paint**"), "{value}");
+    assert!(value.contains("currentColor"), "{value}");
+    assert!(value.contains("```toml"), "{value}");
+}
+
+#[tokio::test]
+async fn document_color_gives_paint_swatches_and_color_presentation_writes_rrggbb() {
+    let dir = tempdir().unwrap();
+    let content = "[defaults]\npaint = \"#FA0\"\n\n[home]\niconify = \"mdi:home\"\npaint = \"none\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let result = call(&mut service, "textDocument/documentColor", Some(json!({ "textDocument": { "uri": uri } })), Some(2))
+        .await
+        .expect("documentColor response");
+    let colors = result.as_array().expect("color list");
+    assert_eq!(colors.len(), 1, "{colors:?}");
+    let range = colors[0]["range"].clone();
+    assert_eq!(range, json!({ "start": { "line": 1, "character": 9 }, "end": { "line": 1, "character": 13 } }));
+    assert_eq!(colors[0]["color"]["red"], 1.0);
+    assert_eq!(colors[0]["color"]["blue"], 0.0);
+
+    let result = call(
+        &mut service,
+        "textDocument/colorPresentation",
+        Some(json!({
+            "textDocument": { "uri": uri },
+            "color": { "red": 0.0, "green": 0.5, "blue": 1.0, "alpha": 1.0 },
+            "range": range
+        })),
+        Some(3),
+    )
+    .await
+    .expect("colorPresentation response");
+    let presentations = result.as_array().expect("presentation list");
+    assert_eq!(presentations.len(), 1, "{presentations:?}");
+    assert_eq!(presentations[0]["label"], "#0080ff");
+    assert_eq!(presentations[0]["textEdit"]["newText"], "#0080ff");
+    assert_eq!(presentations[0]["textEdit"]["range"], range);
+}
+
+#[tokio::test]
+async fn hover_on_an_entry_shows_its_resolved_paint() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "back.svg", "<svg fill=\"currentColor\"/>");
+    let content = "[nav]\npaint = \"#123\"\n\n[nav.back]\nfile = \"back.svg\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let value = hover_value(&mut service, &uri, 4, 10).await;
+    assert!(value.contains("nav-back"), "{value}");
+    assert!(value.contains("- paint: `#112233`"), "{value}");
+}
+
+#[tokio::test]
+async fn hover_on_an_icon_macro_call_shows_the_resolved_paint() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "Cargo.toml", "[package]\nname = \"fixture\"\nversion = \"0.0.0\"\n");
+    write(dir.path(), "docker.svg", "<svg fill=\"currentColor\"/>");
+    write(dir.path(), "icons.gui.toml", "[defaults]\npaint = \"#ABCDEF\"\n\n[docker]\nfile = \"docker.svg\"\n");
+    let rs_content = "fn f() { let _ = icon!(docker); }";
+    let rs_path = write(dir.path(), "main.rs", rs_content);
+    let uri = file_uri(&rs_path);
+
+    let (mut service, _socket) = guicons_lsp::service();
+    call(
+        &mut service,
+        "initialize",
+        Some(json!({ "capabilities": {}, "rootUri": file_uri(dir.path()) })),
+        Some(1),
+    )
+    .await;
+    call(&mut service, "initialized", Some(json!({})), None).await;
+    open(&mut service, &uri, "rust", rs_content).await;
+
+    let value = hover_value(&mut service, &uri, 0, rs_content.find("docker").unwrap()).await;
+    assert!(value.contains("- paint: `#abcdef`"), "{value}");
 }

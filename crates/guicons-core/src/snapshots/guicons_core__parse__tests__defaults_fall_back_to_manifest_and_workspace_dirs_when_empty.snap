@@ -9,4 +9,5 @@ ManifestDefaults {
     ],
     provider: None,
     size: None,
+    paint: None,
 }

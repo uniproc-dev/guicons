@@ -13,6 +13,11 @@ pub mod iced;
 #[cfg(feature = "windows-reactor")]
 pub mod windows_reactor;
 
+#[cfg(feature = "egui")]
+pub mod egui;
+
+mod paint;
+
 #[cfg(feature = "macros")]
 pub use guicons_macros::{icon, icon_data, icon_key};
 
@@ -64,6 +69,57 @@ pub enum IconData {
         codepoint: char,
         font_family: &'static str,
     },
+    /// An SVG declared with `paint`: `template` keeps its `currentColor`,
+    /// which is drawn in `color`.
+    PaintedSvg {
+        template: &'static [u8],
+        color: Color,
+    },
+}
+
+/// The color a painted icon's `currentColor` is drawn in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Color {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Color {
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+impl From<[u8; 3]> for Color {
+    fn from([r, g, b]: [u8; 3]) -> Self {
+        Self { r, g, b }
+    }
+}
+
+impl From<(u8, u8, u8)> for Color {
+    fn from((r, g, b): (u8, u8, u8)) -> Self {
+        Self { r, g, b }
+    }
+}
+
+impl IconData {
+    /// The same icon in another color; `None` if it wasn't declared with `paint`.
+    pub fn with_color(self, color: impl Into<Color>) -> Option<Self> {
+        match self {
+            Self::PaintedSvg { template, .. } => Some(Self::PaintedSvg { template, color: color.into() }),
+            _ => None,
+        }
+    }
+
+    /// SVG bytes ready to render, painted if the icon is; `None` for PNG and glyphs.
+    pub fn svg_bytes(self) -> Option<&'static [u8]> {
+        match self {
+            Self::Svg(bytes) => Some(bytes),
+            Self::PaintedSvg { template, color } => Some(paint::painted(template, color)),
+            Self::Png(_) | Self::Glyph { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

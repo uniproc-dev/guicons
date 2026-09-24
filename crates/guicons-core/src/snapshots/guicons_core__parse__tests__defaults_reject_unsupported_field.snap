@@ -3,5 +3,5 @@ source: crates/guicons-core/src/parse.rs
 expression: errors
 ---
 [
-    "unexpected field(s): `bogus` (expected one of: `root`, `roots`, `provider`, `size`)",
+    "unexpected field(s): `bogus` (expected one of: `root`, `roots`, `provider`, `size`, `paint`)",
 ]

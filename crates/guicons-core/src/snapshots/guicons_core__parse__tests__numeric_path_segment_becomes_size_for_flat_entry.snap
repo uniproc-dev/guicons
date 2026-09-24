@@ -15,6 +15,7 @@ expression: entries
         ),
         dynamic: false,
         windows_ico: None,
+        paint: None,
         span: 39..62,
         file: "",
     },

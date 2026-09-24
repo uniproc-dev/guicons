@@ -1,13 +1,18 @@
-use crate::{IconData, IconSource};
+use crate::{Color, IconData, IconSource};
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
 /// `None` for `Glyph` data - Slint's `Image` has no notion of a font glyph,
 /// use [`glyph_from_data`] for that case instead.
 pub fn image_from_data(data: IconData) -> Option<Image> {
     match data {
-        IconData::Svg(bytes) => Image::load_from_svg_data(bytes).ok(),
         IconData::Png(bytes) => image_from_png_bytes(bytes),
-        IconData::Glyph { .. } => None,
+        other => Image::load_from_svg_data(other.svg_bytes()?).ok(),
+    }
+}
+
+impl From<slint::Color> for Color {
+    fn from(color: slint::Color) -> Self {
+        Self { r: color.red(), g: color.green(), b: color.blue() }
     }
 }
 

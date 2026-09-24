@@ -4,23 +4,25 @@ use proc_macro2::{Ident, Span};
 use quote::quote;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
-use syn::{parse_macro_input, Error, LitInt, LitStr, Result, Token};
+use syn::{parse_macro_input, Error, Expr, LitInt, LitStr, Result, Token};
 
 #[cfg(any(
     all(feature = "slint", feature = "iced"),
     all(feature = "slint", feature = "windows-reactor"),
-    all(feature = "iced", feature = "windows-reactor")
+    all(feature = "slint", feature = "egui"),
+    all(feature = "iced", feature = "windows-reactor"),
+    all(feature = "iced", feature = "egui"),
+    all(feature = "windows-reactor", feature = "egui")
 ))]
 compile_error!(
-    "guicons-macros: enable only one of the `slint`/`iced`/`windows-reactor` features at a time - `icon!` picks its \
+    "guicons-macros: enable only one of the `slint`/`iced`/`windows-reactor`/`egui` features at a time - `icon!` picks its \
      target automatically from whichever is active. Use `icon_data!` if you need the plain `IconData` \
      regardless of which GUI feature is enabled."
 );
 
 /// Which native type `icon!` emits, chosen automatically from whichever of
-/// `guicons-macros`' `slint`/`iced` features is active (mirrored from
-/// `guicons`' own features of the same name). Falls back to `IconData`
-/// when neither is enabled.
+/// `guicons-macros`' GUI features is active (mirrored from `guicons`' own
+/// features of the same name). Falls back to `IconData` when none is enabled.
 #[derive(Clone, Copy)]
 enum Target {
     Data,
@@ -30,6 +32,8 @@ enum Target {
     Iced,
     #[cfg(feature = "windows-reactor")]
     WindowsReactor,
+    #[cfg(feature = "egui")]
+    Egui,
 }
 
 fn active_target() -> Target {
@@ -39,12 +43,14 @@ fn active_target() -> Target {
     return Target::Iced;
     #[cfg(feature = "windows-reactor")]
     return Target::WindowsReactor;
+    #[cfg(feature = "egui")]
+    return Target::Egui;
     #[allow(unreachable_code)]
     Target::Data
 }
 
 /// Resolves a selector straight to the native icon type for whichever GUI
-/// feature is active (`slint`/`iced`), or to `IconData` if neither is - no
+/// feature is active (`slint`/`iced`/`windows-reactor`/`egui`), or to `IconData` if none is - no
 /// manifest-key indirection, no wrapping call needed at the use site. Use
 /// [`icon_data!`] to always get `IconData`, regardless of active features.
 #[proc_macro]
@@ -79,6 +85,7 @@ pub fn icon_key(input: TokenStream) -> TokenStream {
 struct IconMacroInput {
     selector: IconSelector,
     module: Ident,
+    color: Option<Expr>,
 }
 
 impl Parse for IconMacroInput {
@@ -91,34 +98,45 @@ impl Parse for IconMacroInput {
         };
 
         let mut module = Ident::new("icons", Span::call_site());
-        if input.peek(Token![,]) {
+        let mut color = None;
+        while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
-            let key: Ident = input.parse()?;
-            if key != "module" {
-                return Err(Error::new_spanned(key, "expected `module = ...`"));
+            if input.is_empty() {
+                break;
             }
+            let key: Ident = input.parse()?;
             input.parse::<Token![=]>()?;
-            module = input.parse()?;
+            if key == "module" {
+                module = input.parse()?;
+            } else if key == "color" {
+                color = Some(input.parse()?);
+            } else {
+                return Err(Error::new_spanned(key, "expected `module = ...` or `color = ...`"));
+            }
         }
 
         if !input.is_empty() {
             return Err(input.error("unexpected tokens in guicons::icon! input"));
         }
 
-        Ok(Self { selector, module })
+        Ok(Self { selector, module, color })
     }
 }
 
 fn expand_icon(input: IconMacroInput, target: Target) -> Result<proc_macro2::TokenStream> {
+    let color = input.color.as_ref();
     match input.selector {
         IconSelector::FamilyVariant { family, size, variant } => {
-            expand_family_variant_data(&family, size, variant.as_deref(), target)
+            expand_family_variant_data(&family, size, variant.as_deref(), color, target)
         }
-        IconSelector::Iconify(id) => expand_iconify_literal(&id, target),
+        IconSelector::Iconify(id) => expand_iconify_literal(&id, color, target),
     }
 }
 
 fn expand_icon_key(input: IconMacroInput) -> Result<proc_macro2::TokenStream> {
+    if let Some(color) = &input.color {
+        return Err(Error::new_spanned(color, "`icon_key!` names an icon, it has no color"));
+    }
     match input.selector {
         IconSelector::FamilyVariant { family, size, variant } => {
             expand_family_variant_key(&family, size, variant.as_deref(), input.module)
@@ -158,13 +176,56 @@ fn expand_family_variant_key(
 /// (or plain `IconData`) to wrap it in for the requested [`Target`].
 enum ResolvedSource {
     Image { path: String, kind: &'static str },
+    Painted { path: String, color: proc_macro2::TokenStream },
     Glyph { font_family: String, codepoint: char },
+}
+
+/// Turns an SVG declared with `paint` into [`ResolvedSource::Painted`], in the
+/// declared color or the caller's `color = ...`.
+fn apply_paint(
+    resolved: ResolvedSource,
+    paint: Option<guicons_core::PaintColor>,
+    color: Option<&Expr>,
+    name: &str,
+) -> Result<ResolvedSource> {
+    let Some(paint) = paint else {
+        if let Some(color) = color {
+            return Err(Error::new_spanned(
+                color,
+                format!("icon `{name}` isn't declared with `paint`, there is nothing to recolor"),
+            ));
+        }
+        return Ok(resolved);
+    };
+    let ResolvedSource::Image { path, .. } = resolved else {
+        return Ok(resolved);
+    };
+    if let Ok(svg) = std::fs::read(&path) {
+        if !guicons_core::svg_uses_current_color(&svg) {
+            return Err(Error::new(
+                Span::call_site(),
+                format!(
+                    "icon `{name}` is declared with `paint = \"{}\"`, but {path} has no `currentColor` to paint; declare `paint = \"none\"` for it",
+                    paint.to_hex()
+                ),
+            ));
+        }
+    }
+    let color = match color {
+        Some(color) => quote! { guicons::Color::from(#color) },
+        None => {
+            let guicons_core::PaintColor { r, g, b } = paint;
+            quote! { guicons::Color::rgb(#r, #g, #b) }
+        }
+    };
+    Ok(ResolvedSource::Painted { path, color })
 }
 
 fn expand_family_variant_data(
     family: &str,
     size: Option<u16>,
     variant: Option<&str>,
+    color: Option<&Expr>,
     target: Target,
 ) -> Result<proc_macro2::TokenStream> {
     let manifest_path = manifest_dir()?.join("icons.gui.toml");
@@ -191,6 +252,7 @@ fn expand_family_variant_data(
             ResolvedSource::Glyph { font_family, codepoint }
         }
     };
+    let resolved = apply_paint(resolved, entry.paint(), color, entry.key())?;
 
     Ok(emit_for_target(resolved, target))
 }
@@ -222,8 +284,10 @@ fn resolve_iconify_source(id: &str) -> Result<ResolvedSource> {
     })
 }
 
-fn expand_iconify_literal(id: &str, target: Target) -> Result<proc_macro2::TokenStream> {
+fn expand_iconify_literal(id: &str, color: Option<&Expr>, target: Target) -> Result<proc_macro2::TokenStream> {
+    let manifest = load_manifest(&manifest_dir()?.join("icons.gui.toml"))?;
     let resolved = resolve_iconify_source(id)?;
+    let resolved = apply_paint(resolved, manifest.paint_for_iconify(id), color, id)?;
     Ok(emit_for_target(resolved, target))
 }
 
@@ -240,6 +304,9 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
             let kind_ident = Ident::new(kind, Span::call_site());
             quote! { guicons::IconData::#kind_ident(include_bytes!(#path)) }
         }
+        ResolvedSource::Painted { path, color } => {
+            quote! { guicons::IconData::PaintedSvg { template: include_bytes!(#path), color: #color } }
+        }
         ResolvedSource::Glyph { font_family, codepoint } => {
             quote! { guicons::IconData::Glyph { codepoint: #codepoint, font_family: #font_family } }
         }
@@ -249,7 +316,7 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
         Target::Data => data_tokens,
         #[cfg(feature = "slint")]
         Target::Slint => match resolved {
-            ResolvedSource::Image { .. } => quote! {
+            ResolvedSource::Image { .. } | ResolvedSource::Painted { .. } => quote! {
                 guicons::slint::image_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
             },
             ResolvedSource::Glyph { .. } => quote! {
@@ -261,7 +328,7 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
             ResolvedSource::Image { kind, .. } if *kind == "Png" => quote! {
                 guicons::iced::image_handle_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
             },
-            ResolvedSource::Image { .. } => quote! {
+            ResolvedSource::Image { .. } | ResolvedSource::Painted { .. } => quote! {
                 guicons::iced::svg_handle_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
             },
             ResolvedSource::Glyph { .. } => quote! {
@@ -273,8 +340,20 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
             ResolvedSource::Image { path, .. } => quote! {
                 guicons::windows_reactor::icon_builder(#path)
             },
+            ResolvedSource::Painted { path, color } => quote! {
+                guicons::windows_reactor::painted_icon_builder(include_bytes!(#path), #color)
+            },
             ResolvedSource::Glyph { codepoint, .. } => quote! {
                 guicons::windows_reactor::glyph_icon(#codepoint)
+            },
+        },
+        #[cfg(feature = "egui")]
+        Target::Egui => match resolved {
+            ResolvedSource::Image { .. } | ResolvedSource::Painted { .. } => quote! {
+                guicons::egui::image_source_from_data(#data_tokens).expect("guicons: cached icon asset failed to decode")
+            },
+            ResolvedSource::Glyph { .. } => quote! {
+                guicons::egui::glyph_from_data(#data_tokens).expect("guicons: icon entry is not a glyph")
             },
         },
     }

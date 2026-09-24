@@ -91,6 +91,40 @@ pub(crate) fn unresolved_iconify_diagnostics(text: &str, path: &Path, manifest: 
     diagnostics
 }
 
+/// Painted entries whose SVG is available locally but has no `currentColor`
+/// to paint - the build rejects these.
+pub(crate) fn unpaintable_svg_diagnostics(text: &str, path: &Path, manifest: &IconManifest, index: &LineIndex) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for entry in manifest.entries() {
+        if entry.file() != path {
+            continue;
+        }
+        let Some(paint) = entry.paint() else { continue };
+        let svg_path = match entry.source() {
+            IconEntrySource::File(target) => target.clone(),
+            IconEntrySource::Iconify(id) if id.contains(':') => guicons_net::iconify_cache_path(manifest.workspace_root(), id),
+            IconEntrySource::Url(url) => guicons_net::url_cache_path(manifest.workspace_root(), url),
+            _ => continue,
+        };
+        let Ok(svg) = std::fs::read(&svg_path) else { continue };
+        if guicons_core::svg_uses_current_color(&svg) {
+            continue;
+        }
+        diagnostics.push(Diagnostic {
+            range: index.range(text, entry.span()),
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: format!(
+                "icon `{}` is declared with `paint = \"{}\"`, but its SVG has no `currentColor` to paint; declare `paint = \"none\"` for it",
+                entry.key(),
+                paint.to_hex()
+            ),
+            source: Some("guicons".to_string()),
+            ..Default::default()
+        });
+    }
+    diagnostics
+}
+
 /// Closest sibling file by name (Levenshtein distance), for a "did you
 /// mean" suggestion - `None` if nothing in the directory is plausibly a
 /// typo of `target`'s name (rather than just unrelated).
@@ -125,32 +159,37 @@ pub(crate) fn levenshtein(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
+/// Everything published for the manifest document at `path` with content `text`.
+pub(crate) fn document_diagnostics(path: &Path, text: &str, report_syntax_errors: bool) -> Vec<Diagnostic> {
+    let (manifest, errors) = guicons_core::load_icon_manifest_from_str(path, text);
+    let index = LineIndex::new(text);
+    let mut diagnostics: Vec<Diagnostic> = errors
+        .iter()
+        .filter(|error| error.file == path)
+        .filter(|error| should_report_error(&error.message, report_syntax_errors))
+        .map(|error| Diagnostic {
+            range: match &error.span {
+                Some(span) => index.range(text, span.clone()),
+                None => Range::new(Position::new(0, 0), Position::new(0, 0)),
+            },
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: error.message.clone(),
+            source: Some("guicons".to_string()),
+            ..Default::default()
+        })
+        .collect();
+    diagnostics.extend(missing_file_diagnostics(text, path, &manifest, &index));
+    diagnostics.extend(unresolved_iconify_diagnostics(text, path, &manifest, &index));
+    diagnostics.extend(unpaintable_svg_diagnostics(text, path, &manifest, &index));
+    diagnostics
+}
+
 impl Backend {
     pub(crate) async fn publish_diagnostics_for(&self, uri: Url) {
         let Some(path) = Self::path_for_uri(&uri) else { return };
         let Some(text) = self.document_text(&uri).await else { return };
 
-        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, &text);
-        let index = LineIndex::new(&text);
-        let report_syntax_errors = self.reports_toml_syntax_errors();
-        let mut diagnostics: Vec<Diagnostic> = errors
-            .iter()
-            .filter(|error| error.file == path)
-            .filter(|error| should_report_error(&error.message, report_syntax_errors))
-            .map(|error| Diagnostic {
-                range: match &error.span {
-                    Some(span) => index.range(&text, span.clone()),
-                    None => Range::new(Position::new(0, 0), Position::new(0, 0)),
-                },
-                severity: Some(DiagnosticSeverity::ERROR),
-                message: error.message.clone(),
-                source: Some("guicons".to_string()),
-                ..Default::default()
-            })
-            .collect();
-        diagnostics.extend(missing_file_diagnostics(&text, &path, &manifest, &index));
-        diagnostics.extend(unresolved_iconify_diagnostics(&text, &path, &manifest, &index));
-
+        let diagnostics = document_diagnostics(&path, &text, self.reports_toml_syntax_errors());
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
 }

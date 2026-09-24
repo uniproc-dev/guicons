@@ -1,0 +1,7 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "icon manifest entry `spinner` can't be painted: `paint` only recolors SVG icons",
+]

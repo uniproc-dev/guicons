@@ -9,6 +9,7 @@ pub struct IconManifest {
     pub(crate) source_paths: Vec<PathBuf>,
     pub(crate) entries: Vec<IconEntry>,
     pub(crate) providers: HashMap<String, ProviderSchema>,
+    pub(crate) default_paint: Option<Paint>,
 }
 
 /// The known variants/sizes for one icon provider, from `[providers.<name>]`.
@@ -18,7 +19,89 @@ pub struct IconManifest {
 pub struct ProviderSchema {
     pub variants: Vec<String>,
     pub sizes: Vec<u16>,
+    pub paint: Option<Paint>,
 }
+
+/// A declared `paint` value: `"none"` or a `#rgb`/`#rrggbb` color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Paint {
+    None,
+    Color(PaintColor),
+}
+
+/// The color an icon's `currentColor` is painted with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PaintColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Paint {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        if value == "none" {
+            return Ok(Self::None);
+        }
+        PaintColor::parse(value).map(Self::Color)
+    }
+
+    pub fn color(self) -> Option<PaintColor> {
+        match self {
+            Self::None => None,
+            Self::Color(color) => Some(color),
+        }
+    }
+}
+
+impl PaintColor {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let invalid = || format!("`paint` must be `none` or a `#rgb`/`#rrggbb` color, got `{value}`");
+        let hex = value.strip_prefix('#').ok_or_else(invalid)?;
+        if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        let channel = |digits: &str| u8::from_str_radix(digits, 16).map_err(|_| invalid());
+        match hex.len() {
+            3 => {
+                let expand = |index: usize| channel(&hex[index..=index].repeat(2));
+                Ok(Self { r: expand(0)?, g: expand(1)?, b: expand(2)? })
+            }
+            6 => Ok(Self { r: channel(&hex[0..2])?, g: channel(&hex[2..4])?, b: channel(&hex[4..6])? }),
+            _ => Err(invalid()),
+        }
+    }
+
+    /// `#rrggbb`, lowercase.
+    pub fn to_hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+    }
+}
+
+/// Whether an SVG has anything for `paint` to recolor.
+pub fn svg_uses_current_color(svg: &[u8]) -> bool {
+    svg.windows(CURRENT_COLOR.len())
+        .any(|window| window.eq_ignore_ascii_case(CURRENT_COLOR.as_bytes()))
+}
+
+/// `svg` with every `currentColor` replaced by `color`.
+pub fn paint_svg(svg: &[u8], color: PaintColor) -> Vec<u8> {
+    let hex = color.to_hex();
+    let needle = CURRENT_COLOR.as_bytes();
+    let mut out = Vec::with_capacity(svg.len());
+    let mut rest = svg;
+    while !rest.is_empty() {
+        if rest.len() >= needle.len() && rest[..needle.len()].eq_ignore_ascii_case(needle) {
+            out.extend_from_slice(hex.as_bytes());
+            rest = &rest[needle.len()..];
+        } else {
+            out.push(rest[0]);
+            rest = &rest[1..];
+        }
+    }
+    out
+}
+
+const CURRENT_COLOR: &str = "currentColor";
 
 #[derive(Clone, Debug)]
 pub struct IconEntry {
@@ -29,6 +112,7 @@ pub struct IconEntry {
     pub(crate) source: IconEntrySource,
     pub(crate) dynamic: bool,
     pub(crate) windows_ico: Option<PathBuf>,
+    pub(crate) paint: Option<PaintColor>,
     pub(crate) span: Range<usize>,
     pub(crate) file: PathBuf,
 }
@@ -46,6 +130,7 @@ pub(crate) struct ManifestDefaults {
     pub(crate) roots: Vec<PathBuf>,
     pub(crate) provider: Option<String>,
     pub(crate) size: Option<u16>,
+    pub(crate) paint: Option<Paint>,
 }
 
 impl IconManifest {
@@ -106,6 +191,17 @@ impl IconManifest {
     pub fn provider_names(&self) -> impl Iterator<Item = &str> {
         self.providers.keys().map(String::as_str)
     }
+
+    /// Paint for an iconify id used outside any entry (`icon!("mdi:home")`):
+    /// the provider's `paint`, then the root manifest's `[defaults]`.
+    pub fn paint_for_iconify(&self, id: &str) -> Option<PaintColor> {
+        let provider = id.split_once(':').map(|(provider, _)| provider);
+        provider
+            .and_then(|provider| self.providers.get(provider))
+            .and_then(|schema| schema.paint)
+            .or(self.default_paint)
+            .and_then(Paint::color)
+    }
 }
 
 impl IconEntry {
@@ -133,6 +229,12 @@ impl IconEntry {
 
     pub fn dynamic(&self) -> bool {
         self.dynamic
+    }
+
+    /// Default color for the icon's `currentColor`, resolved from the entry,
+    /// its enclosing tables, its iconify provider and `[defaults]`, nearest first.
+    pub fn paint(&self) -> Option<PaintColor> {
+        self.paint
     }
 
     // TODO: app-icon bundling (.ico/.icns generation, of which this is the

@@ -1,3 +1,4 @@
+mod color;
 mod completion;
 mod diagnostics;
 mod goto_definition;
@@ -288,6 +289,7 @@ impl LanguageServer for Backend {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
+                color_provider: Some(ColorProviderCapability::Simple(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -392,15 +394,135 @@ impl LanguageServer for Backend {
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         self.rename_impl(params).await
     }
+
+    async fn document_color(&self, params: DocumentColorParams) -> Result<Vec<ColorInformation>> {
+        self.document_color_impl(params).await
+    }
+
+    async fn color_presentation(&self, params: ColorPresentationParams) -> Result<Vec<ColorPresentation>> {
+        Ok(color::color_presentations(params.color, params.range))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use diagnostics::{closest_file_name, levenshtein, missing_file_diagnostics, should_report_error, unresolved_iconify_diagnostics};
+    use color::{color_presentations, document_colors};
+    use diagnostics::{
+        closest_file_name, document_diagnostics, levenshtein, missing_file_diagnostics, should_report_error,
+        unpaintable_svg_diagnostics, unresolved_iconify_diagnostics,
+    };
     use hover::iconify_literal_hover;
     use position::LineIndex;
     use tempfile::tempdir;
+
+    fn paint_diagnostics(dir: &Path, content: &str) -> Vec<Diagnostic> {
+        let path = dir.join("icons.gui.toml");
+        std::fs::write(&path, content).unwrap();
+        let (manifest, errors) = guicons_core::load_icon_manifest_from_str(&path, content);
+        assert!(errors.is_empty(), "{errors:?}");
+        let index = LineIndex::new(content);
+        unpaintable_svg_diagnostics(content, &guicons_core::canonicalize_or_self(&path), &manifest, &index)
+    }
+
+    #[test]
+    fn unpaintable_svg_diagnostics_flags_a_painted_file_without_current_color() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("logo.svg"), "<svg><path fill=\"#000\"/></svg>").unwrap();
+        let content = "[defaults]\npaint = \"#123\"\n\n[logo]\nfile = \"logo.svg\"\n";
+
+        let diagnostics = paint_diagnostics(dir.path(), content);
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diagnostics[0].range.start.line, 4);
+        let message = &diagnostics[0].message;
+        assert!(message.contains("`paint = \"#112233\"`"), "{message}");
+        assert!(message.contains("no `currentColor`"), "{message}");
+        assert!(message.contains("`paint = \"none\"`"), "{message}");
+    }
+
+    #[test]
+    fn unpaintable_svg_diagnostics_is_silent_when_the_svg_uses_current_color() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("logo.svg"), "<svg><path fill=\"currentColor\"/></svg>").unwrap();
+        let content = "[logo]\nfile = \"logo.svg\"\npaint = \"#fff\"\n";
+
+        assert!(paint_diagnostics(dir.path(), content).is_empty());
+    }
+
+    #[test]
+    fn unpaintable_svg_diagnostics_is_silent_when_unpainted_or_unavailable() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("logo.svg"), "<svg/>").unwrap();
+        let content = "[logo]\nfile = \"logo.svg\"\n\n[missing]\nfile = \"missing.svg\"\npaint = \"#fff\"\n\n[remote]\niconify = \"mdi:home\"\npaint = \"#fff\"\n\n[cancelled]\nfile = \"logo.svg\"\npaint = \"none\"\n";
+
+        assert!(paint_diagnostics(dir.path(), content).is_empty());
+    }
+
+    #[test]
+    fn unpaintable_svg_diagnostics_checks_a_cached_iconify_icon() {
+        let dir = tempdir().unwrap();
+        let cache_path = dir.path().join(".cache/guicons/mdi/home.svg");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, "<svg><path fill=\"#000\"/></svg>").unwrap();
+        let content = "[home]\niconify = \"mdi:home\"\npaint = \"#ABCDEF\"\n";
+
+        let diagnostics = paint_diagnostics(dir.path(), content);
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.contains("`home`"), "{}", diagnostics[0].message);
+        assert!(diagnostics[0].message.contains("#abcdef"), "{}", diagnostics[0].message);
+    }
+
+    #[test]
+    fn document_diagnostics_report_malformed_paint_and_paint_on_a_glyph() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("logo.svg"), "<svg fill=\"currentColor\"/>").unwrap();
+        let content = "[logo]\nfile = \"logo.svg\"\npaint = \"red\"\n\n[spinner]\nglyph = \"MyIconFont:U+E001\"\npaint = \"#fff\"\n";
+        let path = dir.path().join("icons.gui.toml");
+        std::fs::write(&path, content).unwrap();
+
+        let diagnostics = document_diagnostics(&guicons_core::canonicalize_or_self(&path), content, false);
+
+        let malformed = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("`paint` must be"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(malformed.range.start.line, 2);
+        let glyph = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("can't be painted"))
+            .unwrap_or_else(|| panic!("{diagnostics:?}"));
+        assert_eq!(glyph.range.start.line, 6);
+    }
+
+    #[test]
+    fn document_colors_finds_every_paint_color_but_not_none_comments_or_other_keys() {
+        let content = "[defaults]\npaint = \"#fff\"\n# paint = \"#000\"\n\n[settings]\nvariants.a = { iconify = \"x:a\", paint = \"#12AB34\" }\nvariants.b = { iconify = \"#abc\", paint = \"none\" }\n";
+
+        let colors = document_colors(content);
+
+        assert_eq!(colors.len(), 2, "{colors:?}");
+        assert_eq!(colors[0].range, Range::new(Position::new(1, 9), Position::new(1, 13)));
+        assert_eq!((colors[0].color.red, colors[0].color.green, colors[0].color.blue), (1.0, 1.0, 1.0));
+        let line = content.lines().nth(5).unwrap();
+        let start = line.find("#12AB34").unwrap() as u32;
+        assert_eq!(colors[1].range, Range::new(Position::new(5, start), Position::new(5, start + 7)));
+        assert_eq!(colors[1].color.green, f32::from(0xab_u8) / 255.0);
+    }
+
+    #[test]
+    fn color_presentations_write_lowercase_rrggbb() {
+        let range = Range::new(Position::new(1, 9), Position::new(1, 13));
+        let color = Color { red: 1.0, green: f32::from(0xab_u8) / 255.0, blue: 0.0, alpha: 1.0 };
+
+        let presentations = color_presentations(color, range);
+
+        assert_eq!(presentations.len(), 1);
+        assert_eq!(presentations[0].label, "#ffab00");
+        assert_eq!(presentations[0].text_edit, Some(TextEdit { range, new_text: "#ffab00".to_string() }));
+    }
 
     #[test]
     fn missing_file_gets_a_did_you_mean_suggestion_for_a_close_typo() {

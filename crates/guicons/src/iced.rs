@@ -1,10 +1,14 @@
-use crate::{IconData, IconSource};
+use crate::{Color, IconData, IconSource};
 use iced::widget::{image, svg};
 
 pub fn svg_handle_from_data(data: IconData) -> Option<svg::Handle> {
-    match data {
-        IconData::Svg(bytes) => Some(svg::Handle::from_memory(bytes)),
-        _ => None,
+    data.svg_bytes().map(svg::Handle::from_memory)
+}
+
+impl From<iced::Color> for Color {
+    fn from(color: iced::Color) -> Self {
+        let [r, g, b, _] = color.into_rgba8();
+        Self { r, g, b }
     }
 }
 
