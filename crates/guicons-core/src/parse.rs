@@ -5,12 +5,12 @@
 //! `toml_span::parse` and validates/extracts entries from it.
 
 use crate::diagnostics::Diagnostics;
-use crate::model::{IconEntry, IconEntrySource, IconManifest, ManifestDefaults, Paint, ProviderSchema};
+use crate::model::{IconEntry, IconEntrySource, IconManifest, ManifestDefaults, Paint, PaintColor, ProviderSchema, ThemePaint};
 use crate::paths::resolve_workspace_path;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use toml_span::de_helpers::TableHelper;
-use toml_span::value::{Table, Value, ValueInner};
+use toml_span::value::{Key, Table, Value, ValueInner};
 use toml_span::{Span, Spanned};
 
 pub(crate) const ENTRY_KEYS: &[&str] = &[
@@ -32,26 +32,45 @@ fn take_table<'de>(value: &mut Value<'de>) -> Option<Table<'de>> {
 }
 
 fn take_paint(table: &mut Table<'_>, diags: &mut Diagnostics) -> Option<Paint> {
-    let mut value = table.remove("paint")?;
+    parse_paint(table.remove("paint")?, diags).ok()
+}
+
+/// `Err` once the error is reported, so the caller can drop the whole table.
+fn parse_optional_paint(value: Option<(Key<'_>, Value<'_>)>, diags: &mut Diagnostics) -> Result<Option<Paint>, ()> {
+    value.map(|(_, value)| parse_paint(value, diags)).transpose()
+}
+
+/// `Err` once the error is reported.
+fn parse_paint(mut value: Value<'_>, diags: &mut Diagnostics) -> Result<Paint, ()> {
     let span = value.span;
     match value.take() {
-        ValueInner::String(text) => parse_paint(Spanned { value: text.into_owned(), span }, diags),
+        ValueInner::String(text) => Paint::parse(&text).map_err(|message| diags.error(Some(span.into()), message)),
+        ValueInner::Table(table) => {
+            let mut th = TableHelper::from((table, span));
+            let light: Option<Spanned<String>> = th.optional_s("light");
+            let dark: Option<Spanned<String>> = th.optional_s("dark");
+            if let Err(err) = th.finalize(None) {
+                diags.push_deser_error(err);
+                return Err(());
+            }
+            let (Some(light), Some(dark)) = (light, dark) else {
+                diags.error(Some(span.into()), "`paint` per theme needs both `light` and `dark`");
+                return Err(());
+            };
+            Ok(Paint::Colors(ThemePaint { light: parse_color(light, diags)?, dark: parse_color(dark, diags)? }))
+        }
         _ => {
-            diags.error(Some(span.into()), "`paint` must be a string");
-            None
+            diags.error(
+                Some(span.into()),
+                "`paint` must be `\"none\"`, a `#rgb`/`#rrggbb` color, or `{ light = ..., dark = ... }`",
+            );
+            Err(())
         }
     }
 }
 
-fn parse_paint(value: Spanned<String>, diags: &mut Diagnostics) -> Option<Paint> {
-    Paint::parse(&value.value)
-        .map_err(|message| diags.error(Some(value.span.into()), message))
-        .ok()
-}
-
-/// `Err` once the error is reported, so the caller can drop the whole table.
-fn parse_optional_paint(value: Option<Spanned<String>>, diags: &mut Diagnostics) -> Result<Option<Paint>, ()> {
-    value.map(|value| parse_paint(value, diags).ok_or(())).transpose()
+fn parse_color(value: Spanned<String>, diags: &mut Diagnostics) -> Result<PaintColor, ()> {
+    PaintColor::parse(&value.value).map_err(|message| diags.error(Some(value.span.into()), message))
 }
 
 fn split_family_and_size(path: &[String]) -> (String, Option<u16>) {
@@ -234,14 +253,14 @@ fn parse_entry(
     let glyph: Option<String> = th.optional("glyph");
     let windows_ico: Option<String> = th.optional("windows-ico");
     let dynamic: bool = th.optional("dynamic").unwrap_or(false);
-    let own_paint: Option<Spanned<String>> = th.optional_s("paint");
+    let own_paint = th.take("paint");
 
     if let Err(err) = th.finalize(None) {
         diags.push_deser_error(err);
         return None;
     }
 
-    let own_paint_span = own_paint.as_ref().map(|paint| paint.span);
+    let own_paint_span = own_paint.as_ref().map(|(_, paint)| paint.span);
     let own_paint = parse_optional_paint(own_paint, diags).ok()?;
 
     let roots: Vec<PathBuf> = root
@@ -366,9 +385,9 @@ fn parse_entry(
             .or(inherited_paint)
             .or(provider_paint)
             .or(defaults.paint)
-            .and_then(Paint::color)
+            .and_then(Paint::colors)
     } else {
-        if let (Some(Paint::Color(_)), Some(span)) = (own_paint, own_paint_span) {
+        if let (Some(Paint::Colors(_)), Some(span)) = (own_paint, own_paint_span) {
             diags.error(
                 Some(span.into()),
                 format!("icon manifest entry `{key}` can't be painted: `paint` only recolors SVG icons"),
@@ -424,11 +443,11 @@ pub(crate) fn parse_defaults(
     let roots_field: Option<Vec<String>> = th.optional("roots");
     let provider: Option<String> = th.optional("provider");
     let size: Option<u16> = th.optional("size");
-    let paint: Option<Spanned<String>> = th.optional_s("paint");
+    let paint = th.take("paint");
     if let Err(err) = th.finalize(None) {
         diags.push_deser_error(err);
     }
-    let paint = paint.and_then(|value| parse_paint(value, diags));
+    let paint = parse_optional_paint(paint, diags).ok().flatten();
 
     let mut roots = Vec::new();
     if let Some(value) = root {
@@ -507,7 +526,7 @@ pub(crate) fn parse_providers(
             let mut th = TableHelper::from((override_table, override_span));
             let variants: Option<Vec<String>> = th.optional("variants");
             let sizes: Option<Vec<u16>> = th.optional("sizes");
-            let paint: Option<Spanned<String>> = th.optional_s("paint");
+            let paint = th.take("paint");
             if let Err(err) = th.finalize(None) {
                 diags.push_deser_error(err);
                 continue;
@@ -523,7 +542,7 @@ pub(crate) fn parse_providers(
         let mut th = TableHelper::from((entry_table, entry_span));
         let variants: Option<Vec<String>> = th.optional("variants");
         let sizes: Option<Vec<u16>> = th.optional("sizes");
-        let paint: Option<Spanned<String>> = th.optional_s("paint");
+        let paint = th.take("paint");
         if let Err(err) = th.finalize(None) {
             diags.push_deser_error(err);
             continue;
@@ -1099,7 +1118,13 @@ mod tests {
         let paints = manifest
             .entries()
             .iter()
-            .map(|entry| (entry.key().to_string(), entry.paint().map(crate::PaintColor::to_hex)))
+            .map(|entry| {
+                let paint = entry.paint().map(|paint| match paint.light == paint.dark {
+                    true => paint.light.to_hex(),
+                    false => format!("{}/{}", paint.light.to_hex(), paint.dark.to_hex()),
+                });
+                (entry.key().to_string(), paint)
+            })
             .collect();
         (paints, errors.into_iter().map(|e| e.message).collect())
     }
@@ -1154,6 +1179,54 @@ mod tests {
         assert_eq!(paint_of(&paints, "group-inner"), Some("#444444"));
         assert_eq!(paint_of(&paints, "family-a"), Some("#555555"));
         assert_eq!(paint_of(&paints, "family-b"), Some("#666666"));
+    }
+
+    #[test]
+    fn paint_can_differ_per_theme() {
+        let (paints, errors) = paints_for(
+            r##"
+            [defaults]
+            paint = { light = "#1a1a1a", dark = "#fff" }
+
+            [providers.acme]
+            paint.light = "#111"
+            paint.dark = "#222"
+
+            [home]
+            iconify = "mdi:home"
+
+            [gear]
+            iconify = "acme:gear"
+
+            [prohibited]
+            iconify = "mdi:cancel"
+            paint = "#c42b1c"
+            "##,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(paint_of(&paints, "home"), Some("#1a1a1a/#ffffff"));
+        assert_eq!(paint_of(&paints, "gear"), Some("#111111/#222222"));
+        assert_eq!(paint_of(&paints, "prohibited"), Some("#c42b1c"));
+    }
+
+    #[test]
+    fn malformed_theme_paint_is_an_error() {
+        let (_, errors) = paints_for(
+            r##"
+            [only-light]
+            iconify = "mdi:home"
+            paint = { light = "#fff" }
+
+            [unknown-theme]
+            iconify = "mdi:home"
+            paint = { light = "#fff", dark = "#000", sepia = "#700" }
+
+            [not-a-color]
+            iconify = "mdi:home"
+            paint = 3
+            "##,
+        );
+        insta::assert_debug_snapshot!(errors);
     }
 
     #[test]

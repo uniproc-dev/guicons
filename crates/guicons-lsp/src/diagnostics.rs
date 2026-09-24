@@ -99,7 +99,9 @@ pub(crate) fn unpaintable_svg_diagnostics(text: &str, path: &Path, manifest: &Ic
         if entry.file() != path {
             continue;
         }
-        let Some(paint) = entry.paint() else { continue };
+        if entry.paint().is_none() {
+            continue;
+        }
         let svg_path = match entry.source() {
             IconEntrySource::File(target) => target.clone(),
             IconEntrySource::Iconify(id) if id.contains(':') => guicons_net::iconify_cache_path(manifest.workspace_root(), id),
@@ -114,9 +116,9 @@ pub(crate) fn unpaintable_svg_diagnostics(text: &str, path: &Path, manifest: &Ic
             range: index.range(text, entry.span()),
             severity: Some(DiagnosticSeverity::ERROR),
             message: format!(
-                "icon `{}` is declared with `paint = \"{}\"`, but its SVG has no `currentColor` to paint; declare `paint = \"none\"` for it",
+                "icon `{}` is declared with `paint`, but {} has no `currentColor` to paint; declare `paint = \"none\"` for it",
                 entry.key(),
-                paint.to_hex()
+                manifest.display_path(&svg_path)
             ),
             source: Some("guicons".to_string()),
             ..Default::default()

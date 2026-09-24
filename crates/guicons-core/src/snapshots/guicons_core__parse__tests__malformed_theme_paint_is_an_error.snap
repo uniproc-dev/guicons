@@ -1,0 +1,9 @@
+---
+source: crates/guicons-core/src/parse.rs
+expression: errors
+---
+[
+    "`paint` must be `\"none\"`, a `#rgb`/`#rrggbb` color, or `{ light = ..., dark = ... }`",
+    "`paint` per theme needs both `light` and `dark`",
+    "unexpected field(s): `sepia` (expected one of: `light`, `dark`)",
+]

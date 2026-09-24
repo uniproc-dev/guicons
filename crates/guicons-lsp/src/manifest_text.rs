@@ -39,6 +39,7 @@ pub enum SectionKind {
     Link,
     Provider,
     Entry,
+    Paint,
 }
 
 pub fn section_kind_at(text: &str, offset: usize) -> SectionKind {
@@ -53,6 +54,7 @@ pub fn section_kind_at(text: &str, offset: usize) -> SectionKind {
         return match inner {
             "defaults" => SectionKind::Defaults,
             "link" => SectionKind::Link,
+            _ if is_paint_header(inner) => SectionKind::Paint,
             _ if inner.starts_with("providers") => SectionKind::Provider,
             _ => SectionKind::Entry,
         };
@@ -142,35 +144,50 @@ pub fn iconify_field_at(text: &str, offset: usize) -> Option<(std::ops::Range<us
     quoted_prefix_span_at(text, offset)
 }
 
-/// If `offset` is inside a `paint = "..."` value (also inside an inline
-/// table), returns the byte range typed so far plus that text.
-pub fn paint_field_at(text: &str, offset: usize) -> Option<(std::ops::Range<usize>, String)> {
+/// Which string a `paint` value is: the whole `paint`, or one theme's color
+/// (`light`/`dark` in `paint = { ... }`, `paint.light`, or a `[x.paint]` table).
+#[derive(Debug, PartialEq, Eq)]
+pub enum PaintValueKind {
+    Paint,
+    Theme,
+}
+
+/// If `offset` is inside a `paint` string value, returns which kind, the
+/// byte range typed so far and that text.
+pub fn paint_field_at(text: &str, offset: usize) -> Option<(PaintValueKind, std::ops::Range<usize>, String)> {
     let (span, prefix) = quoted_prefix_span_at(text, offset)?;
     let line_start = line_start_of(text, offset);
-    (key_before_value(&text[line_start..span.start - 1])? == "paint").then_some((span, prefix))
+    let in_paint_table = matches!(section_kind_at(text, offset), SectionKind::Paint);
+    let kind = paint_value_kind(&text[line_start..span.start - 1], in_paint_table)?;
+    Some((kind, span, prefix))
 }
 
-/// Whether `offset` is where a key goes inside an inline table on its line
-/// (`variants.filled = { file = "x.svg", | }`).
-pub fn inline_table_key_at(text: &str, offset: usize) -> bool {
+/// If `offset` is where a key goes inside an inline table on its line
+/// (`variants.filled = { file = "x.svg", | }`), returns the dotted key typed
+/// so far and the key owning that table (`filled`).
+pub fn inline_table_key_at(text: &str, offset: usize) -> Option<(&str, Option<&str>)> {
     let before = &text[line_start_of(text, offset)..offset];
     if is_inside_string_literal(before, before.len()) {
-        return false;
+        return None;
     }
-    let Some(open) = before.rfind('{') else { return false };
-    if before[open..].contains('}') {
-        return false;
+    let open = innermost_open_brace(before)?;
+    let tail = before[open + 1..].rsplit(',').next().unwrap_or_default().trim_start();
+    if !tail.chars().all(|c| is_key_char(c) || c == '.') {
+        return None;
     }
-    let tail = before[open + 1..].rsplit(',').next().unwrap_or_default();
-    tail.trim_start().chars().all(is_key_char)
+    Some((tail, key_before_value(&before[..open])))
 }
 
-/// Every `paint = "..."` string value in `text`: the byte range inside the
-/// quotes and the raw value.
+/// Every `paint` string value in `text` (including per-theme `light`/`dark`
+/// ones): the byte range inside the quotes and the raw value.
 pub fn paint_values(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     let mut values = Vec::new();
     let mut line_start = 0usize;
+    let mut in_paint_table = false;
     for line in text.split_inclusive('\n') {
+        if let Some(inner) = line.trim().strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            in_paint_table = is_paint_header(inner);
+        }
         let mut search = 0;
         while let Some(rel_start) = line[search..].find('"') {
             let quote_start = search + rel_start;
@@ -179,7 +196,7 @@ pub fn paint_values(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
             }
             let Some(rel_end) = line[quote_start + 1..].find('"') else { break };
             let quote_end = quote_start + 1 + rel_end;
-            if key_before_value(&line[..quote_start]) == Some("paint") {
+            if paint_value_kind(&line[..quote_start], in_paint_table).is_some() {
                 let value = &line[quote_start + 1..quote_end];
                 values.push((line_start + quote_start + 1..line_start + quote_end, value.to_string()));
             }
@@ -190,9 +207,60 @@ pub fn paint_values(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     values
 }
 
+/// Whether a dotted key being typed names a theme of `paint` (`paint.`, `paint.li`).
+pub fn is_paint_theme_key(key: &str) -> bool {
+    key.rsplit_once('.').is_some_and(|(head, _)| head.rsplit('.').next() == Some("paint"))
+}
+
+fn paint_value_kind(before: &str, in_paint_table: bool) -> Option<PaintValueKind> {
+    let key = dotted_key_before_value(before)?;
+    let mut segments = key.rsplit('.');
+    let last = segments.next()?;
+    if last == "paint" {
+        return Some(PaintValueKind::Paint);
+    }
+    if last != "light" && last != "dark" {
+        return None;
+    }
+    let under_paint = match segments.next() {
+        Some(parent) => parent == "paint",
+        None => match innermost_open_brace(before) {
+            Some(open) => key_before_value(&before[..open]) == Some("paint"),
+            None => in_paint_table,
+        },
+    };
+    under_paint.then_some(PaintValueKind::Theme)
+}
+
+fn is_paint_header(inner: &str) -> bool {
+    inner.ends_with(".paint")
+}
+
+fn innermost_open_brace(before: &str) -> Option<usize> {
+    let mut open = Vec::new();
+    let mut in_string = false;
+    for (index, c) in before.char_indices() {
+        match c {
+            '"' => in_string = !in_string,
+            '{' if !in_string => open.push(index),
+            '}' if !in_string => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    open.last().copied()
+}
+
 fn key_before_value(before: &str) -> Option<&str> {
     let before = before.trim_end().strip_suffix('=')?.trim_end();
     let key = &before[before.trim_end_matches(is_key_char).len()..];
+    (!key.is_empty()).then_some(key)
+}
+
+fn dotted_key_before_value(before: &str) -> Option<&str> {
+    let before = before.trim_end().strip_suffix('=')?.trim_end();
+    let key = &before[before.trim_end_matches(|c| is_key_char(c) || c == '.').len()..];
     (!key.is_empty()).then_some(key)
 }
 
@@ -332,8 +400,8 @@ const KEYWORD_DOCS: &[(&str, KeywordDoc)] = &[
         example: "dynamic = true",
     }),
     ("paint", KeywordDoc {
-        description: "Default color for an SVG's `currentColor`: `#rgb`/`#rrggbb`, or `none` to cancel an inherited one. Nearest wins: entry, enclosing table, provider, `[defaults]`.",
-        example: "[providers.tabler.override]\npaint = \"#1e1e1e\"\n\n[logo]\nfile = \"logo.svg\"\npaint = \"none\"",
+        description: "Default color for an SVG's `currentColor`: `#rgb`/`#rrggbb` for every theme, `{ light = ..., dark = ... }` per theme, or `none` to cancel an inherited one. Nearest wins: entry, enclosing table, provider, `[defaults]`. The app picks the theme at runtime with `guicons::set_theme(Theme::Dark)`; `icon!(x, color = ...)` overrides.",
+        example: "[providers.tabler.override]\npaint = { light = \"#1e1e1e\", dark = \"#f5f5f5\" }\n\n[logo]\nfile = \"logo.svg\"\npaint = \"none\"",
     }),
 ];
 

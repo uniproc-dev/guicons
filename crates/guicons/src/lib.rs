@@ -22,6 +22,7 @@ mod paint;
 pub use guicons_macros::{icon, icon_data, icon_key};
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 #[macro_export]
 macro_rules! include_icons {
@@ -70,11 +71,50 @@ pub enum IconData {
         font_family: &'static str,
     },
     /// An SVG declared with `paint`: `template` keeps its `currentColor`,
-    /// which is drawn in `color`.
+    /// drawn in `color` if set, otherwise in the current [`theme`]'s color.
     PaintedSvg {
         template: &'static [u8],
-        color: Color,
+        colors: ThemeColors,
+        color: Option<Color>,
     },
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Theme {
+    #[default]
+    Light,
+    Dark,
+}
+
+static THEME: AtomicU8 = AtomicU8::new(Theme::Light as u8);
+
+/// Picks which of the manifest's `paint` colors icons are drawn in.
+/// Icons built before the call keep their color.
+pub fn set_theme(theme: Theme) {
+    THEME.store(theme as u8, Ordering::Relaxed);
+}
+
+pub fn theme() -> Theme {
+    match THEME.load(Ordering::Relaxed) {
+        value if value == Theme::Dark as u8 => Theme::Dark,
+        _ => Theme::Light,
+    }
+}
+
+/// A painted icon's colors per theme, from the manifest's `paint`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ThemeColors {
+    pub light: Color,
+    pub dark: Color,
+}
+
+impl ThemeColors {
+    pub const fn get(self, theme: Theme) -> Color {
+        match theme {
+            Theme::Light => self.light,
+            Theme::Dark => self.dark,
+        }
+    }
 }
 
 /// The color a painted icon's `currentColor` is drawn in.
@@ -104,10 +144,20 @@ impl From<(u8, u8, u8)> for Color {
 }
 
 impl IconData {
-    /// The same icon in another color; `None` if it wasn't declared with `paint`.
+    /// The same icon in `color` regardless of theme; `None` if it wasn't declared with `paint`.
     pub fn with_color(self, color: impl Into<Color>) -> Option<Self> {
         match self {
-            Self::PaintedSvg { template, .. } => Some(Self::PaintedSvg { template, color: color.into() }),
+            Self::PaintedSvg { template, colors, .. } => {
+                Some(Self::PaintedSvg { template, colors, color: Some(color.into()) })
+            }
+            _ => None,
+        }
+    }
+
+    /// The color a painted icon is drawn in right now.
+    pub fn color(self) -> Option<Color> {
+        match self {
+            Self::PaintedSvg { colors, color, .. } => Some(color.unwrap_or_else(|| colors.get(theme()))),
             _ => None,
         }
     }
@@ -116,7 +166,7 @@ impl IconData {
     pub fn svg_bytes(self) -> Option<&'static [u8]> {
         match self {
             Self::Svg(bytes) => Some(bytes),
-            Self::PaintedSvg { template, color } => Some(paint::painted(template, color)),
+            Self::PaintedSvg { template, .. } => Some(paint::painted(template, self.color()?)),
             Self::Png(_) | Self::Glyph { .. } => None,
         }
     }

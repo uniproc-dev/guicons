@@ -15,12 +15,12 @@ impl From<windows_reactor::Color> for Color {
     }
 }
 
-/// What `icon!(...)` expands to for an icon declared with `paint`.
+/// What `icon!(...)` expands to for an icon declared with `paint`, drawn in
+/// its color for the current theme.
 ///
 /// WinUI loads SVG only from a file, so the painted SVG is written once per
 /// color under the temp directory.
-pub fn painted_icon_builder(template: &'static [u8], color: impl Into<Color>) -> IconBuilder {
-    let data = IconData::PaintedSvg { template, color: color.into() };
+pub fn painted_icon_builder(data: IconData) -> IconBuilder {
     let path = data.svg_bytes().map(painted_file).unwrap_or_default();
     icon_builder(path)
 }

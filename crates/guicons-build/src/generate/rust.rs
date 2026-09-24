@@ -1,6 +1,6 @@
 use super::shared::write_if_changed;
 use crate::materialize::{ImageKind, MaterializedIcon, MaterializedIconBackend, MaterializedPaint};
-use guicons_core::{rust_const_name, rust_fn_name, rust_variant_name};
+use guicons_core::{rust_const_name, rust_fn_name, rust_variant_name, PaintColor};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -86,14 +86,14 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
     let data_arms = icons
         .iter()
         .map(|icon| match &icon.backend {
-            MaterializedIconBackend::Image { paint: Some(MaterializedPaint { template, color }), .. } if !icon.dynamic => {
+            MaterializedIconBackend::Image { paint: Some(MaterializedPaint { template, colors, .. }), .. } if !icon.dynamic => {
                 let template = template.to_string_lossy().replace('\\', "\\\\");
+                let rgb = |color: PaintColor| format!("guicons::Color::rgb({}, {}, {})", color.r, color.g, color.b);
                 format!(
-                    "        keys::{} => Some(IconData::PaintedSvg {{ template: include_bytes!(\"{template}\"), color: guicons::Color::rgb({}, {}, {}) }}),",
+                    "        keys::{} => Some(IconData::PaintedSvg {{ template: include_bytes!(\"{template}\"), colors: guicons::ThemeColors {{ light: {}, dark: {} }}, color: None }}),",
                     rust_const_name(&icon.key),
-                    color.r,
-                    color.g,
-                    color.b
+                    rgb(colors.light),
+                    rgb(colors.dark)
                 )
             }
             MaterializedIconBackend::Image { path, kind, .. } if !icon.dynamic => {
@@ -123,6 +123,14 @@ pub(crate) fn generate_rust_icon_registry_from_materialized(
     let path_arms = icons
         .iter()
         .map(|icon| match &icon.backend {
+            MaterializedIconBackend::Image { path, paint: Some(paint), .. } if !icon.dynamic => {
+                let light = path.to_string_lossy().replace('\\', "\\\\");
+                let dark = paint.dark_path.to_string_lossy().replace('\\', "\\\\");
+                format!(
+                    "        keys::{} => Some(match guicons::theme() {{ guicons::Theme::Light => \"{light}\", guicons::Theme::Dark => \"{dark}\" }}),",
+                    rust_const_name(&icon.key)
+                )
+            }
             MaterializedIconBackend::Image { path, .. } if !icon.dynamic => {
                 let path = path.to_string_lossy().replace('\\', "\\\\");
                 format!("        keys::{} => Some(\"{path}\"),", rust_const_name(&icon.key))

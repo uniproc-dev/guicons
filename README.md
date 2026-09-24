@@ -115,13 +115,14 @@ Use `guicons` normally at runtime, and add `guicons-build` as a
 
 ### Icon color
 
-`paint` sets the color an SVG's `currentColor` is drawn in. The nearest
-declaration wins: the entry, its enclosing tables, its iconify provider,
-then `[defaults]`. `"none"` cancels what comes from above.
+`paint` sets the color an SVG's `currentColor` is drawn in, one for both
+themes or one per theme. The nearest declaration wins: the entry, its
+enclosing tables, its iconify provider, then `[defaults]`. `"none"`
+cancels what comes from above.
 
 ```toml
 [defaults]
-paint = "#1a1a1a"
+paint = { light = "#1a1a1a", dark = "#ffffff" }
 
 [providers.logos]
 paint = "none"
@@ -131,10 +132,13 @@ iconify = "fluent:prohibited-24-regular"
 paint = "#c42b1c"
 ```
 
-The declared color is a default; pass the app's own at the call site:
+The app sets the theme once, and again when it changes; icons built after
+that use its color. `color = ...` overrides it at a call site:
 
 ```rust
-guicons::icon!(settings.filled, color = theme.foreground)
+guicons::set_theme(guicons::Theme::Dark);
+guicons::icon!(settings.filled);
+guicons::icon!(settings.filled, color = accent);
 ```
 
 A painted SVG without `currentColor`, or `color = ...` on an icon without

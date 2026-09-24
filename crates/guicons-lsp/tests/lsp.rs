@@ -1499,7 +1499,64 @@ async fn hover_on_the_paint_keyword_shows_docs() {
     let value = hover_value(&mut service, &uri, 2, 1).await;
     assert!(value.contains("**paint**"), "{value}");
     assert!(value.contains("currentColor"), "{value}");
+    assert!(value.contains("{ light = ..., dark = ... }"), "{value}");
+    assert!(value.contains("guicons::set_theme(Theme::Dark)"), "{value}");
     assert!(value.contains("```toml"), "{value}");
+}
+
+#[tokio::test]
+async fn completion_offers_light_and_dark_under_paint() {
+    let dir = tempdir().unwrap();
+    let content = "[home]\niconify = \"mdi:home\"\npaint = {  }\n\n[back]\niconify = \"mdi:back\"\npaint.\n\n[settings]\nvariants.a = { iconify = \"x:a\", paint.d }\nvariants.b = { iconify = \"x:b\", paint = { light = \"#111\",  } }\n\n[nav.paint]\n\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let positions = [
+        (2, "paint = { ".len()),
+        (6, "paint.".len()),
+        (9, lines[9].find("paint.d").unwrap() + "paint.d".len()),
+        (10, lines[10].find("\"#111\", ").unwrap() + "\"#111\", ".len()),
+        (13, 0),
+    ];
+    for (line, character) in positions {
+        let labels = completion_labels(&mut service, &uri, line, character).await;
+        assert_eq!(labels, vec!["light", "dark"], "line {line}");
+    }
+}
+
+#[tokio::test]
+async fn completion_inside_a_theme_color_offers_nothing() {
+    let dir = tempdir().unwrap();
+    let content = "[home]\niconify = \"mdi:home\"\npaint = { light = \"\" }\n\n[back]\niconify = \"mdi:back\"\npaint.dark = \"\"\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let inline = completion_labels(&mut service, &uri, 2, "paint = { light = \"".len()).await;
+    assert!(inline.is_empty(), "{inline:?}");
+    let dotted = completion_labels(&mut service, &uri, 6, "paint.dark = \"".len()).await;
+    assert!(dotted.is_empty(), "{dotted:?}");
+}
+
+#[tokio::test]
+async fn hover_on_an_entry_shows_per_theme_paint() {
+    let dir = tempdir().unwrap();
+    write(dir.path(), "back.svg", "<svg fill=\"currentColor\"/>");
+    let content = "[back]\nfile = \"back.svg\"\npaint = { light = \"#111\", dark = \"#EEE\" }\n";
+    let path = write(dir.path(), "icons.gui.toml", content);
+    let uri = file_uri(&path);
+
+    let mut service = initialized_service().await;
+    open(&mut service, &uri, "toml", content).await;
+
+    let value = hover_value(&mut service, &uri, 1, 10).await;
+    assert!(value.contains("- paint: light `#111111`, dark `#eeeeee`"), "{value}");
 }
 
 #[tokio::test]

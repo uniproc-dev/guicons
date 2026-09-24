@@ -437,8 +437,8 @@ mod tests {
         assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
         assert_eq!(diagnostics[0].range.start.line, 4);
         let message = &diagnostics[0].message;
-        assert!(message.contains("`paint = \"#112233\"`"), "{message}");
-        assert!(message.contains("no `currentColor`"), "{message}");
+        assert!(message.contains("icon `logo` is declared with `paint`, but "), "{message}");
+        assert!(message.contains("logo.svg has no `currentColor` to paint"), "{message}");
         assert!(message.contains("`paint = \"none\"`"), "{message}");
     }
 
@@ -466,13 +466,13 @@ mod tests {
         let cache_path = dir.path().join(".cache/guicons/mdi/home.svg");
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
         std::fs::write(&cache_path, "<svg><path fill=\"#000\"/></svg>").unwrap();
-        let content = "[home]\niconify = \"mdi:home\"\npaint = \"#ABCDEF\"\n";
+        let content = "[home]\niconify = \"mdi:home\"\npaint = { light = \"#000\", dark = \"#fff\" }\n";
 
         let diagnostics = paint_diagnostics(dir.path(), content);
 
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(diagnostics[0].message.contains("`home`"), "{}", diagnostics[0].message);
-        assert!(diagnostics[0].message.contains("#abcdef"), "{}", diagnostics[0].message);
+        assert!(diagnostics[0].message.contains("mdi/home.svg"), "{}", diagnostics[0].message);
     }
 
     #[test]
@@ -510,6 +510,22 @@ mod tests {
         let start = line.find("#12AB34").unwrap() as u32;
         assert_eq!(colors[1].range, Range::new(Position::new(5, start), Position::new(5, start + 7)));
         assert_eq!(colors[1].color.green, f32::from(0xab_u8) / 255.0);
+    }
+
+    #[test]
+    fn document_colors_covers_per_theme_colors_under_paint_only() {
+        let content = "[a]\npaint = { light = \"#111\", dark = \"#222\" }\npaint.light = \"#333\"\n\n[b]\nvariants.x = { iconify = \"x:a\", paint.dark = \"#444\" }\nvariants.y = { iconify = \"x:b\", paint = { light = \"#555\", dark = \"#666\" } }\nvariants.z = { iconify = \"x:c\", light = \"#999\" }\ntheme.light = \"#999\"\nlight = \"#999\"\n\n[nav.paint]\nlight = \"#777\"\ndark = \"#888\"\n";
+
+        let colors = document_colors(content);
+
+        let hexes: Vec<String> = colors
+            .iter()
+            .map(|info| {
+                let start = LineIndex::new(content).offset(content, info.range.start).unwrap();
+                content[start..start + 4].to_string()
+            })
+            .collect();
+        assert_eq!(hexes, vec!["#111", "#222", "#333", "#444", "#555", "#666", "#777", "#888"]);
     }
 
     #[test]

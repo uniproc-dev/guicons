@@ -35,7 +35,7 @@ fn paint_svg(template: &[u8], color: Color) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::IconData;
+    use crate::{IconData, Theme, ThemeColors};
 
     const TEMPLATE: &[u8] = b"<svg><path stroke=\"currentColor\" style=\"fill:currentcolor\"/></svg>";
 
@@ -56,14 +56,29 @@ mod tests {
         assert!(!std::ptr::eq(first, other));
     }
 
+    const COLORS: ThemeColors = ThemeColors { light: Color::rgb(0, 0, 0), dark: Color::rgb(255, 255, 255) };
+
+    #[test]
+    fn painted_icon_follows_the_theme_unless_overridden() {
+        let icon = IconData::PaintedSvg { template: TEMPLATE, colors: COLORS, color: None };
+        let red = icon.with_color([255, 0, 0]).unwrap();
+
+        crate::set_theme(Theme::Light);
+        assert_eq!(icon.color(), Some(Color::rgb(0, 0, 0)));
+        assert_eq!(red.color(), Some(Color::rgb(255, 0, 0)));
+
+        crate::set_theme(Theme::Dark);
+        assert_eq!(icon.color(), Some(Color::rgb(255, 255, 255)));
+        assert_eq!(red.color(), Some(Color::rgb(255, 0, 0)));
+        assert!(std::ptr::eq(icon.svg_bytes().unwrap(), painted(TEMPLATE, Color::rgb(255, 255, 255))));
+
+        crate::set_theme(Theme::Light);
+    }
+
     #[test]
     fn with_color_only_repaints_painted_icons() {
-        let icon = IconData::PaintedSvg { template: TEMPLATE, color: Color::rgb(0, 0, 0) };
-        assert_eq!(
-            icon.with_color([255, 255, 255]),
-            Some(IconData::PaintedSvg { template: TEMPLATE, color: Color::rgb(255, 255, 255) })
-        );
         assert_eq!(IconData::Svg(TEMPLATE).with_color([255, 255, 255]), None);
+        assert_eq!(IconData::Svg(TEMPLATE).color(), None);
         assert_eq!(IconData::Svg(TEMPLATE).svg_bytes(), Some(TEMPLATE));
     }
 }

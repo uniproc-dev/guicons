@@ -1,7 +1,7 @@
 use crate::iconify_completion::{self, IconifyContext};
 use crate::manifest_text::{
-    defaults_root, iconify_field_at, inline_table_key_at, paint_field_at, path_field_at, section_kind_at,
-    word_prefix_span, PathFieldKind, SectionKind,
+    defaults_root, iconify_field_at, inline_table_key_at, is_paint_theme_key, paint_field_at, path_field_at,
+    section_kind_at, word_prefix_span, PaintValueKind, PathFieldKind, SectionKind,
 };
 use crate::position::LineIndex;
 use crate::Backend;
@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
+
+const THEME_FIELDS: [&str; 2] = ["light", "dark"];
 
 /// Where `file`/`windows-ico` completion should look for candidates:
 /// `defaults.root` (if declared) resolved against the workspace root,
@@ -143,10 +145,14 @@ impl Backend {
             return Ok(Some(CompletionResponse::List(CompletionList { is_incomplete, items })));
         }
 
-        if let Some((quote_span, typed)) = paint_field_at(&text, offset) {
+        if let Some((kind, quote_span, typed)) = paint_field_at(&text, offset) {
             let range = index.range(&text, quote_span);
-            let items = ["none"]
-                .into_iter()
+            let values: &[&str] = match kind {
+                PaintValueKind::Paint => &["none"],
+                PaintValueKind::Theme => &[],
+            };
+            let items = values
+                .iter()
                 .filter(|value| value.starts_with(&typed))
                 .map(|value| CompletionItem {
                     label: value.to_string(),
@@ -158,9 +164,20 @@ impl Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        if inline_table_key_at(&text, offset) {
-            let fields = ["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "paint"];
+        if let Some((key, owner)) = inline_table_key_at(&text, offset) {
+            let fields: &[&str] = match (owner, key.contains('.')) {
+                _ if is_paint_theme_key(key) => &THEME_FIELDS,
+                (_, true) => &[],
+                (Some("paint"), false) => &THEME_FIELDS,
+                (_, false) => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "paint"],
+            };
             let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+
+        if line_prefix.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') && is_paint_theme_key(line_prefix)
+        {
+            let items = THEME_FIELDS.iter().map(|name| make_item(name.to_string(), "field")).collect();
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
@@ -186,6 +203,7 @@ impl Backend {
                 SectionKind::Link => &["includes"],
                 SectionKind::Provider => &["variants", "sizes", "paint"],
                 SectionKind::Entry => &["file", "iconify", "url", "glyph", "windows-ico", "dynamic", "root", "paint", "variants"],
+                SectionKind::Paint => &THEME_FIELDS,
             };
             let items = fields.iter().map(|name| make_item(name.to_string(), "field")).collect();
             return Ok(Some(CompletionResponse::Array(items)));

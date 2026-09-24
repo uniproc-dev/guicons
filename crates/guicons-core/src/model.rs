@@ -22,11 +22,19 @@ pub struct ProviderSchema {
     pub paint: Option<Paint>,
 }
 
-/// A declared `paint` value: `"none"` or a `#rgb`/`#rrggbb` color.
+/// A declared `paint` value: `"none"`, one `#rgb`/`#rrggbb` color for every
+/// theme, or `{ light = ..., dark = ... }`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Paint {
     None,
-    Color(PaintColor),
+    Colors(ThemePaint),
+}
+
+/// The colors an icon's `currentColor` is painted with, per theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ThemePaint {
+    pub light: PaintColor,
+    pub dark: PaintColor,
 }
 
 /// The color an icon's `currentColor` is painted with.
@@ -38,24 +46,35 @@ pub struct PaintColor {
 }
 
 impl Paint {
+    /// The string form: `"none"` or one color for every theme.
     pub fn parse(value: &str) -> Result<Self, String> {
         if value == "none" {
             return Ok(Self::None);
         }
-        PaintColor::parse(value).map(Self::Color)
+        PaintColor::parse(value)
+            .map(|color| Self::Colors(ThemePaint::uniform(color)))
+            .map_err(|_| {
+                format!("`paint` must be `\"none\"`, a `#rgb`/`#rrggbb` color, or `{{ light = ..., dark = ... }}`, got `{value}`")
+            })
     }
 
-    pub fn color(self) -> Option<PaintColor> {
+    pub fn colors(self) -> Option<ThemePaint> {
         match self {
             Self::None => None,
-            Self::Color(color) => Some(color),
+            Self::Colors(colors) => Some(colors),
         }
+    }
+}
+
+impl ThemePaint {
+    pub fn uniform(color: PaintColor) -> Self {
+        Self { light: color, dark: color }
     }
 }
 
 impl PaintColor {
     pub fn parse(value: &str) -> Result<Self, String> {
-        let invalid = || format!("`paint` must be `none` or a `#rgb`/`#rrggbb` color, got `{value}`");
+        let invalid = || format!("`paint` colors must be `#rgb`/`#rrggbb`, got `{value}`");
         let hex = value.strip_prefix('#').ok_or_else(invalid)?;
         if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(invalid());
@@ -112,7 +131,7 @@ pub struct IconEntry {
     pub(crate) source: IconEntrySource,
     pub(crate) dynamic: bool,
     pub(crate) windows_ico: Option<PathBuf>,
-    pub(crate) paint: Option<PaintColor>,
+    pub(crate) paint: Option<ThemePaint>,
     pub(crate) span: Range<usize>,
     pub(crate) file: PathBuf,
 }
@@ -194,13 +213,13 @@ impl IconManifest {
 
     /// Paint for an iconify id used outside any entry (`icon!("mdi:home")`):
     /// the provider's `paint`, then the root manifest's `[defaults]`.
-    pub fn paint_for_iconify(&self, id: &str) -> Option<PaintColor> {
+    pub fn paint_for_iconify(&self, id: &str) -> Option<ThemePaint> {
         let provider = id.split_once(':').map(|(provider, _)| provider);
         provider
             .and_then(|provider| self.providers.get(provider))
             .and_then(|schema| schema.paint)
             .or(self.default_paint)
-            .and_then(Paint::color)
+            .and_then(Paint::colors)
     }
 }
 
@@ -231,9 +250,9 @@ impl IconEntry {
         self.dynamic
     }
 
-    /// Default color for the icon's `currentColor`, resolved from the entry,
+    /// Per-theme colors for the icon's `currentColor`, resolved from the entry,
     /// its enclosing tables, its iconify provider and `[defaults]`, nearest first.
-    pub fn paint(&self) -> Option<PaintColor> {
+    pub fn paint(&self) -> Option<ThemePaint> {
         self.paint
     }
 

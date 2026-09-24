@@ -176,15 +176,15 @@ fn expand_family_variant_key(
 /// (or plain `IconData`) to wrap it in for the requested [`Target`].
 enum ResolvedSource {
     Image { path: String, kind: &'static str },
-    Painted { path: String, color: proc_macro2::TokenStream },
+    Painted { path: String, colors: proc_macro2::TokenStream, color: proc_macro2::TokenStream },
     Glyph { font_family: String, codepoint: char },
 }
 
 /// Turns an SVG declared with `paint` into [`ResolvedSource::Painted`], in the
-/// declared color or the caller's `color = ...`.
+/// declared per-theme colors or the caller's `color = ...`.
 fn apply_paint(
     resolved: ResolvedSource,
-    paint: Option<guicons_core::PaintColor>,
+    paint: Option<guicons_core::ThemePaint>,
     color: Option<&Expr>,
     name: &str,
 ) -> Result<ResolvedSource> {
@@ -205,20 +205,19 @@ fn apply_paint(
             return Err(Error::new(
                 Span::call_site(),
                 format!(
-                    "icon `{name}` is declared with `paint = \"{}\"`, but {path} has no `currentColor` to paint; declare `paint = \"none\"` for it",
-                    paint.to_hex()
+                    "icon `{name}` is declared with `paint`, but {path} has no `currentColor` to paint; declare `paint = \"none\"` for it"
                 ),
             ));
         }
     }
+    let rgb = |guicons_core::PaintColor { r, g, b }: guicons_core::PaintColor| quote! { guicons::Color::rgb(#r, #g, #b) };
+    let (light, dark) = (rgb(paint.light), rgb(paint.dark));
+    let colors = quote! { guicons::ThemeColors { light: #light, dark: #dark } };
     let color = match color {
-        Some(color) => quote! { guicons::Color::from(#color) },
-        None => {
-            let guicons_core::PaintColor { r, g, b } = paint;
-            quote! { guicons::Color::rgb(#r, #g, #b) }
-        }
+        Some(color) => quote! { ::core::option::Option::Some(guicons::Color::from(#color)) },
+        None => quote! { ::core::option::Option::None },
     };
-    Ok(ResolvedSource::Painted { path, color })
+    Ok(ResolvedSource::Painted { path, colors, color })
 }
 
 fn expand_family_variant_data(
@@ -304,8 +303,8 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
             let kind_ident = Ident::new(kind, Span::call_site());
             quote! { guicons::IconData::#kind_ident(include_bytes!(#path)) }
         }
-        ResolvedSource::Painted { path, color } => {
-            quote! { guicons::IconData::PaintedSvg { template: include_bytes!(#path), color: #color } }
+        ResolvedSource::Painted { path, colors, color } => {
+            quote! { guicons::IconData::PaintedSvg { template: include_bytes!(#path), colors: #colors, color: #color } }
         }
         ResolvedSource::Glyph { font_family, codepoint } => {
             quote! { guicons::IconData::Glyph { codepoint: #codepoint, font_family: #font_family } }
@@ -340,8 +339,8 @@ fn emit_for_target(resolved: ResolvedSource, target: Target) -> proc_macro2::Tok
             ResolvedSource::Image { path, .. } => quote! {
                 guicons::windows_reactor::icon_builder(#path)
             },
-            ResolvedSource::Painted { path, color } => quote! {
-                guicons::windows_reactor::painted_icon_builder(include_bytes!(#path), #color)
+            ResolvedSource::Painted { .. } => quote! {
+                guicons::windows_reactor::painted_icon_builder(#data_tokens)
             },
             ResolvedSource::Glyph { codepoint, .. } => quote! {
                 guicons::windows_reactor::glyph_icon(#codepoint)

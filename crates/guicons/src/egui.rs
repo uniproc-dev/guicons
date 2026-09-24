@@ -81,7 +81,8 @@ mod tests {
     }
 
     fn painted(color: Color) -> ImageSource<'static> {
-        image_source_from_data(IconData::PaintedSvg { template: TEMPLATE, color }).unwrap()
+        let colors = crate::ThemeColors { light: color, dark: color };
+        image_source_from_data(IconData::PaintedSvg { template: TEMPLATE, colors, color: None }).unwrap()
     }
 
     #[test]

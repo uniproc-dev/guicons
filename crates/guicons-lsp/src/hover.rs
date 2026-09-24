@@ -33,7 +33,11 @@ fn entry_hover_lines(entry: &IconEntry, manifest: &IconManifest) -> Vec<String> 
     }
     lines.push(format!("- source: {}", describe_source(entry.source(), manifest)));
     if let Some(paint) = entry.paint() {
-        lines.push(format!("- paint: `{}`", paint.to_hex()));
+        if paint.light == paint.dark {
+            lines.push(format!("- paint: `{}`", paint.light.to_hex()));
+        } else {
+            lines.push(format!("- paint: light `{}`, dark `{}`", paint.light.to_hex(), paint.dark.to_hex()));
+        }
     }
     lines
 }
